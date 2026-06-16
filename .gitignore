@@ -1,0 +1,5 @@
+dist/
+target/
+$HOME
+.env
+.DS_Store
