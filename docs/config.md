@@ -36,6 +36,7 @@ models = ["gpt-5.5"]
 ```
 
 The active model selection (`gn --model`) is saved separately, not in `runtime.toml`.
+
 On macOS, `runtime.toml` is saved in `~/Library/Application Support/gn`; on Windows, it is saved in `%APPDATA%\gn`, falling back to `%LOCALAPPDATA%\gn` and then `%USERPROFILE%\AppData\Roaming\gn`.
 
 For workflow behavior, see **[workflow.md](workflow.md)**.
