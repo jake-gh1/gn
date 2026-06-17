@@ -9,7 +9,6 @@ const MAX_NEWS_PUBLISHER_WIDTH: usize = 18;
 const MAX_NEWS_LABEL_WIDTH: usize = 25;
 const MIN_NEWS_LABEL_WIDTH: usize = "Label".len();
 const MIN_NEWS_TITLE_WIDTH: usize = 28;
-const FRESH_NEWS_ARTICLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(12 * 60 * 60);
 
 struct NewsArticleTableState {
     layout: NewsArticleTableLayout,
@@ -81,14 +80,14 @@ impl AppModel {
     pub(crate) fn news_article_table_row_line_with_layout(
         &self,
         layout: NewsArticleTableLayout,
-        is_fresh: bool,
+        has_marker: bool,
         date: String,
         publisher: &str,
         label: &str,
         title: &str,
     ) -> String {
         let (_, date_width, publisher_width, label_width, title_width) = layout;
-        let row_marker = if is_fresh { "•  " } else { "   " };
+        let row_marker = if has_marker { "•  " } else { "   " };
         let date = truncate_with_ellipsis(&date, date_width);
         let publisher = truncate_with_ellipsis(publisher, publisher_width);
         let label = truncate_with_ellipsis(label, label_width);
@@ -113,7 +112,7 @@ impl AppModel {
         let article = articles.get(*state.rows.get(row_idx)?)?;
         Some(self.news_article_table_row_line_with_layout(
             state.layout,
-            self.is_fresh_news_article(article),
+            self.should_mark_news_article_row(row_idx),
             self.format_news_article_age(article.published_at),
             &article.publisher,
             article.label.trim(),
@@ -171,14 +170,8 @@ impl AppModel {
         format!("{}y ago", days / 365)
     }
 
-    fn is_fresh_news_article(&self, article: &NewsArticle) -> bool {
-        let within_window = article.published_at.is_some_and(|published_at| {
-            std::time::SystemTime::now()
-                .duration_since(published_at)
-                .unwrap_or_default()
-                < FRESH_NEWS_ARTICLE_WINDOW
-        });
-        if !within_window {
+    fn should_mark_news_article_row(&self, row_idx: usize) -> bool {
+        if row_idx != 0 {
             return false;
         }
         let Some(ticker) = self.company_tickers.first() else {
@@ -186,7 +179,7 @@ impl AppModel {
         };
         self.new_article_keys
             .get(&ticker.to_ascii_uppercase())
-            .is_some_and(|keys| keys.contains(&article.cache_key()))
+            .is_some_and(|keys| !keys.is_empty())
     }
 }
 

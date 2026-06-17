@@ -24,7 +24,7 @@ gn msft            # search company
   # Labels fill.
 # RSS refreshes each run.
   # Prior decisions and labels cached.
-# Fresh articles newer than 12hrs flagged with a "•".
+# If new articles are found, the top row is flagged with a "•".
 # Enter opens the article.
 ```
 

@@ -623,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_news_articles_do_not_have_row_marker() {
+    fn new_article_keys_mark_only_top_row_when_new_articles_found() {
         let mut model = AppModel::new(RuntimeConfig::default());
         model.width = 120;
         model.company_tickers = vec!["NVDA".to_string()];
@@ -681,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn workflow_new_article_keys_do_not_mark_stale_articles() {
+    fn workflow_new_article_keys_mark_top_row_even_when_stale() {
         let mut model = AppModel::new(RuntimeConfig::default());
         model.width = 120;
         model.company_tickers = vec!["NVDA".to_string()];
@@ -701,13 +701,14 @@ mod tests {
         let line = model
             .news_article_table_line_for_index(0)
             .expect("news table row");
-        assert!(line.starts_with("   13hrs ago"));
+        assert!(line.starts_with("•  13hrs ago"));
         let styled = model
             .style_news_article_table_line(&line, None)
             .expect("style");
+        assert_eq!(styled.spans[0].content.as_ref(), "•");
         assert_eq!(
             styled.spans[0].style,
-            Style::default().fg(model.palette.dim)
+            Style::default().fg(ratatui::style::Color::White)
         );
     }
 
