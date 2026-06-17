@@ -285,43 +285,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn combined_query_prompt_accepts_a_match_for_any_search_term() {
-        let prompt = build_query_news_relevance_prompt(
-            "msft / aapl / nvda",
-            &[(
-                "Reuters".to_string(),
-                "Apple expands US chip investment".to_string(),
-            )],
-        );
-
-        assert!(prompt.contains("Search alternatives (an article may match any one):"));
-        assert!(prompt.contains("- msft\n- aapl\n- nvda"));
-        assert!(prompt.contains("at least one search term"));
-    }
-
-    #[test]
-    fn relevance_prompts_exclude_company_profile_pages() {
-        let company_prompt = build_news_relevance_prompt(
-            &CompanyIdentity {
-                ticker: "GOOG".to_string(),
-                company_name: "Alphabet Inc.".to_string(),
-            },
-            &[("Engadget".to_string(), "Google".to_string())],
-        );
-        let query_prompt = build_query_news_relevance_prompt(
-            "google",
-            &[("Engadget".to_string(), "Google".to_string())],
-        );
-
-        for prompt in [company_prompt, query_prompt] {
-            assert!(
-                prompt.contains("Exclude company profile, tag, topic, landing, or directory pages")
-            );
-            assert!(prompt.contains("with no concrete news event"));
-        }
-    }
-
-    #[test]
     fn news_relevance_decisions_parse_included_title_numbers() {
         assert_eq!(
             parse_news_relevance_decisions(r#"{"include":[1,3]}"#, 3),

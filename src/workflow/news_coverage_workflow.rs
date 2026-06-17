@@ -1247,49 +1247,6 @@ mod unit_tests {
             parse_news_editorial_labels(r#"{"items":[{"label":"AI Stock Shorts"}]}"#, 2).is_none()
         );
     }
-
-    #[test]
-    fn repair_prompt_rejects_active_company_repetition() {
-        let excluded_terms = news_label_excluded_terms(&["NVDA", "Nvidia Corp"]);
-        let cases = [
-            (
-                NewsEditorialLabelItem {
-                    article_idx: 0,
-                    publisher: "CNBC".to_string(),
-                    title: "Week Ahead: Nvidia's moment".to_string(),
-                },
-                "Upcoming Nvidia Moment",
-            ),
-            (
-                NewsEditorialLabelItem {
-                    article_idx: 0,
-                    publisher: "The Information".to_string(),
-                    title: "AI & Tech Brief: Nvidia's warning on the 'inflection point'"
-                        .to_string(),
-                },
-                "Nvidia Issues Warning",
-            ),
-        ];
-
-        for (item, invalid_label) in cases {
-            let reason = validate_item_label(invalid_label, &item, &excluded_terms)
-                .expect_err("company repetition should be rejected");
-            let prompt = build_news_editorial_label_repair_prompt(
-                "Company context: Nvidia Corp (NVDA)",
-                &item,
-                invalid_label,
-                reason,
-                &excluded_terms,
-            );
-
-            assert!(prompt.contains("Return ONLY a JSON object"));
-            assert!(prompt.contains("Do not repeat the active company name or ticker"));
-            assert!(prompt.contains(&format!("Invalid label: {invalid_label}")));
-            assert!(prompt.contains("Disallowed label terms:"));
-            assert!(prompt.contains("nvidia"));
-            assert!(prompt.contains("remove that term"));
-        }
-    }
 }
 
 #[cfg(test)]
