@@ -207,7 +207,6 @@ impl AppModel {
         match event {
             WorkflowUiEvent::Progress(WorkflowProgress::Stage(note)) => {
                 debug_log("ui", format!("workflow progress stage={note}"));
-                self.finish_token_display();
                 self.progress_note = Some(note);
                 false
             }
@@ -228,7 +227,6 @@ impl AppModel {
                     "ui",
                     format!("workflow progress snapshot articles={}", articles.len()),
                 );
-                self.finish_token_display();
                 self.live_articles = Some(articles);
                 self.story_menu_focused = self.news_article_row_count() > 0;
                 self.story_menu_highlight = self
@@ -262,14 +260,12 @@ impl AppModel {
                 self.record_search_run_nonfatal(search_term, &result);
                 self.status_message = (!result.answer.is_empty()).then(|| result.answer.clone());
                 self.handle_step_complete(STEP_LABEL, result, fallback_label);
-                self.finish_token_display();
                 self.clear_live_workflow_state();
                 true
             }
             WorkflowUiEvent::Done(Err(err)) => {
                 self.completed_elapsed = Some(self.started_at.elapsed());
                 debug_log("ui", format!("workflow failed err={err}"));
-                self.finish_token_display();
                 self.clear_live_workflow_state();
                 self.set_status_message(&format!("Workflow failed: {err}"));
                 true

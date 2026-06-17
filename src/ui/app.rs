@@ -30,8 +30,14 @@ use tokio::runtime::Runtime as TokioRuntime;
 use crate::ui::*;
 
 const UI_FRAME_INTERVAL_MS: u64 = 33;
-const TOKEN_DISPLAY_CATCHUP_SECONDS: f64 = 0.35;
-const TOKEN_DISPLAY_MIN_RATE_PER_SECOND: f64 = 4_000.0;
+// The footer token counter eases toward the running total. Usage arrives in bursts (the
+// per-phase chunks complete in parallel) with multi-second gaps between phases, so while
+// the run is live it eases with no floor: the glide asymptotes toward the target but never
+// reaches it, slowing between bursts and speeding back up at the next one rather than
+// parking. Once the run ends, a settle floor converges the residual lag so the counter
+// comes to rest a single time.
+const TOKEN_DISPLAY_EASE_SECONDS: f64 = 1.2;
+const TOKEN_DISPLAY_SETTLE_RATE_PER_SECOND: f64 = 1_200.0;
 
 fn model_matches(model: &crate::config::ModelConfig, requested: &str) -> bool {
     model.model_id == requested
@@ -330,22 +336,25 @@ impl AppModel {
             return;
         }
 
+        // No floor while the run is live, so the glide never fully catches up between
+        // token bursts; once it's done, the floor settles the residual lag to rest.
+        let settle_rate = if self.workflow_events.is_some() {
+            0.0
+        } else {
+            TOKEN_DISPLAY_SETTLE_RATE_PER_SECOND
+        };
         self.displayed_input_tokens = advance_displayed_tokens(
             self.displayed_input_tokens,
             self.total_input_tokens as f64,
             elapsed,
+            settle_rate,
         );
         self.displayed_output_tokens = advance_displayed_tokens(
             self.displayed_output_tokens,
             self.total_output_tokens as f64,
             elapsed,
+            settle_rate,
         );
-    }
-
-    pub(crate) fn finish_token_display(&mut self) {
-        self.displayed_input_tokens = self.total_input_tokens as f64;
-        self.displayed_output_tokens = self.total_output_tokens as f64;
-        self.token_display_updated_at = Instant::now();
     }
 
     pub(crate) fn displayed_token_counts(&self) -> (usize, usize) {
@@ -358,14 +367,23 @@ impl AppModel {
     }
 }
 
-fn advance_displayed_tokens(current: f64, target: f64, elapsed_seconds: f64) -> f64 {
+fn advance_displayed_tokens(
+    current: f64,
+    target: f64,
+    elapsed_seconds: f64,
+    settle_rate: f64,
+) -> f64 {
     let remaining = target - current;
     if remaining.abs() < 1.0 {
         return target;
     }
-    let rate =
-        (remaining.abs() / TOKEN_DISPLAY_CATCHUP_SECONDS).max(TOKEN_DISPLAY_MIN_RATE_PER_SECOND);
-    let step = rate * elapsed_seconds;
+    // Exponential ease-out: each frame closes a fixed fraction of the remaining gap, so
+    // the counter decelerates as it approaches instead of racing flat-out.
+    let eased = remaining.abs() * (1.0 - (-elapsed_seconds / TOKEN_DISPLAY_EASE_SECONDS).exp());
+    // `settle_rate` is zero while the run is live (pure ease, so it never reaches the
+    // target and never parks); after the run it floors the pace so the last stretch
+    // settles instead of crawling.
+    let step = eased.max(settle_rate * elapsed_seconds);
     if step >= remaining.abs() {
         target
     } else {
@@ -568,7 +586,8 @@ mod tests {
         model.completed_elapsed = Some(Duration::from_secs(83));
         model.total_input_tokens = 1_408;
         model.total_output_tokens = 207;
-        model.finish_token_display();
+        model.displayed_input_tokens = 1_408.0;
+        model.displayed_output_tokens = 207.0;
 
         let line = model.footer_plain_line();
         let timestamp = line.rsplit(" · @").next().expect("timestamp field");
@@ -586,34 +605,27 @@ mod tests {
     }
 
     #[test]
-    fn footer_token_counts_animate_toward_usage_totals() {
+    fn token_counter_lags_while_running_and_settles_when_done() {
         let mut model = AppModel::new(RuntimeConfig::default());
-        model.displayed_input_tokens = 100.0;
-        model.displayed_output_tokens = 20.0;
-        model.total_input_tokens = 1_100;
-        model.total_output_tokens = 2_020;
-        model.token_display_updated_at = Instant::now() - Duration::from_millis(50);
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        model.workflow_events = Some(receiver);
+        model.total_input_tokens = 10_000;
 
+        // While the run is live the glide eases up but never catches all the way to the
+        // total, even across a long frame — so it keeps lagging the latest burst.
+        model.token_display_updated_at = Instant::now() - Duration::from_secs(1);
         model.sync_token_display();
-        let (input_tokens, output_tokens) = model.displayed_token_counts();
+        let lagging = model.displayed_token_counts().0;
+        assert!(lagging > 0);
+        assert!(lagging < 10_000);
 
-        assert!(input_tokens > 100);
-        assert!(input_tokens < 1_100);
-        assert!(output_tokens > 20);
-        assert!(output_tokens < 2_020);
-    }
-
-    #[test]
-    fn footer_token_counts_settle_at_workflow_boundaries() {
-        let mut model = AppModel::new(RuntimeConfig::default());
-        model.displayed_input_tokens = 100.0;
-        model.displayed_output_tokens = 20.0;
-        model.total_input_tokens = 1_100;
-        model.total_output_tokens = 220;
-
-        model.finish_token_display();
-
-        assert_eq!(model.displayed_token_counts(), (1_100, 220));
+        // Once the run ends, the settle floor converges the residual lag to the total.
+        model.workflow_events = None;
+        for _ in 0..200 {
+            model.token_display_updated_at = Instant::now() - Duration::from_millis(33);
+            model.sync_token_display();
+        }
+        assert_eq!(model.displayed_token_counts(), (10_000, 0));
     }
 
     #[test]
@@ -646,7 +658,8 @@ mod tests {
         model.poll_workflow_events();
 
         assert_eq!(model.progress_note.as_deref(), Some("Labeling 3 articles…"));
-        assert_eq!(model.displayed_token_counts(), (1_000, 200));
+        // The stage no longer snaps the counter; it keeps lagging behind the total.
+        assert!(model.displayed_token_counts().0 < model.total_input_tokens);
     }
 
     #[test]
