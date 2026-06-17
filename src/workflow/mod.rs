@@ -77,6 +77,7 @@ pub enum WorkflowProgress {
     Stage(String),
     Identity(CompanyIdentity),
     Snapshot(Vec<NewsArticle>),
+    Usage(TokenUsage),
 }
 
 pub type ProgressSink = Arc<dyn Fn(WorkflowProgress) + Send + Sync>;

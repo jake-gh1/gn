@@ -30,6 +30,8 @@ use tokio::runtime::Runtime as TokioRuntime;
 use crate::ui::*;
 
 const UI_FRAME_INTERVAL_MS: u64 = 33;
+const TOKEN_DISPLAY_CATCHUP_SECONDS: f64 = 0.35;
+const TOKEN_DISPLAY_MIN_RATE_PER_SECOND: f64 = 4_000.0;
 
 fn model_matches(model: &crate::config::ModelConfig, requested: &str) -> bool {
     model.model_id == requested
@@ -73,6 +75,11 @@ pub struct AppModel {
     pub(crate) view_ready: bool,
     pub(crate) total_input_tokens: usize,
     pub(crate) total_output_tokens: usize,
+    pub(crate) displayed_input_tokens: f64,
+    pub(crate) displayed_output_tokens: f64,
+    pub(crate) token_display_updated_at: Instant,
+    pub(crate) run_reported_input_tokens: usize,
+    pub(crate) run_reported_output_tokens: usize,
     pub(crate) started_at: Instant,
     pub(crate) run_started_at: SystemTime,
     pub(crate) completed_elapsed: Option<Duration>,
@@ -130,6 +137,11 @@ impl AppModel {
             view_ready: false,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            displayed_input_tokens: 0.0,
+            displayed_output_tokens: 0.0,
+            token_display_updated_at: Instant::now(),
+            run_reported_input_tokens: 0,
+            run_reported_output_tokens: 0,
             started_at: Instant::now(),
             run_started_at: SystemTime::now(),
             completed_elapsed: None,
@@ -306,6 +318,64 @@ impl AppModel {
         self.codex_auth_in_flight = false;
         self.active_model = active_model_index(&self.runtime, 0);
     }
+
+    pub(crate) fn sync_token_display(&mut self) {
+        let now = Instant::now();
+        let elapsed = now
+            .checked_duration_since(self.token_display_updated_at)
+            .unwrap_or_default()
+            .as_secs_f64();
+        self.token_display_updated_at = now;
+        if elapsed <= 0.0 {
+            return;
+        }
+
+        self.displayed_input_tokens = advance_displayed_tokens(
+            self.displayed_input_tokens,
+            self.total_input_tokens as f64,
+            elapsed,
+        );
+        self.displayed_output_tokens = advance_displayed_tokens(
+            self.displayed_output_tokens,
+            self.total_output_tokens as f64,
+            elapsed,
+        );
+    }
+
+    pub(crate) fn finish_token_display(&mut self) {
+        self.displayed_input_tokens = self.total_input_tokens as f64;
+        self.displayed_output_tokens = self.total_output_tokens as f64;
+        self.token_display_updated_at = Instant::now();
+    }
+
+    pub(crate) fn displayed_token_counts(&self) -> (usize, usize) {
+        let target_input = self.total_input_tokens;
+        let target_output = self.total_output_tokens;
+        (
+            rounded_displayed_tokens(self.displayed_input_tokens, target_input),
+            rounded_displayed_tokens(self.displayed_output_tokens, target_output),
+        )
+    }
+}
+
+fn advance_displayed_tokens(current: f64, target: f64, elapsed_seconds: f64) -> f64 {
+    let remaining = target - current;
+    if remaining.abs() < 1.0 {
+        return target;
+    }
+    let rate =
+        (remaining.abs() / TOKEN_DISPLAY_CATCHUP_SECONDS).max(TOKEN_DISPLAY_MIN_RATE_PER_SECOND);
+    let step = rate * elapsed_seconds;
+    if step >= remaining.abs() {
+        target
+    } else {
+        current + remaining.signum() * step
+    }
+}
+
+fn rounded_displayed_tokens(value: f64, target: usize) -> usize {
+    let rounded = value.round().max(0.0) as usize;
+    rounded.min(target)
 }
 
 pub(crate) fn runtime_config_modified_at(path: &std::path::Path) -> Option<SystemTime> {
@@ -393,7 +463,7 @@ mod tests {
         fs,
         path::PathBuf,
         sync::{Arc, Mutex},
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use crate::config::{ModelConfig, RuntimeConfig};
@@ -401,6 +471,7 @@ mod tests {
         ArticleAnalysisUpdate, CachedNews, CompanyIdentity, NewsArticle, SearchHistoryRecord,
         SourceStore, record_search_history_run, search_history_entries,
     };
+    use crate::llm::TokenUsage;
     use crate::ui::{AppModel, WorkflowUiEvent};
     use crate::workflow::{WorkflowProgress, WorkflowResult};
     use ratatui::style::Style;
@@ -497,12 +568,10 @@ mod tests {
         model.completed_elapsed = Some(Duration::from_secs(83));
         model.total_input_tokens = 1_408;
         model.total_output_tokens = 207;
+        model.finish_token_display();
 
         let line = model.footer_plain_line();
-        let timestamp = line
-            .rsplit(" · @")
-            .next()
-            .expect("timestamp field");
+        let timestamp = line.rsplit(" · @").next().expect("timestamp field");
 
         assert!(!line.contains("Model:"));
         assert!(!line.contains("Tokens:"));
@@ -514,6 +583,70 @@ mod tests {
         assert!(!timestamp.contains('T'));
         assert!(!line.contains(" · Ran: "));
         assert!(!line.contains(" · Time: "));
+    }
+
+    #[test]
+    fn footer_token_counts_animate_toward_usage_totals() {
+        let mut model = AppModel::new(RuntimeConfig::default());
+        model.displayed_input_tokens = 100.0;
+        model.displayed_output_tokens = 20.0;
+        model.total_input_tokens = 1_100;
+        model.total_output_tokens = 2_020;
+        model.token_display_updated_at = Instant::now() - Duration::from_millis(50);
+
+        model.sync_token_display();
+        let (input_tokens, output_tokens) = model.displayed_token_counts();
+
+        assert!(input_tokens > 100);
+        assert!(input_tokens < 1_100);
+        assert!(output_tokens > 20);
+        assert!(output_tokens < 2_020);
+    }
+
+    #[test]
+    fn footer_token_counts_settle_at_workflow_boundaries() {
+        let mut model = AppModel::new(RuntimeConfig::default());
+        model.displayed_input_tokens = 100.0;
+        model.displayed_output_tokens = 20.0;
+        model.total_input_tokens = 1_100;
+        model.total_output_tokens = 220;
+
+        model.finish_token_display();
+
+        assert_eq!(model.displayed_token_counts(), (1_100, 220));
+    }
+
+    #[test]
+    fn usage_progress_yields_a_frame_before_later_workflow_events() {
+        let mut model = AppModel::new(RuntimeConfig::default());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        model.workflow_events = Some(receiver);
+
+        sender
+            .send(WorkflowUiEvent::Progress(WorkflowProgress::Usage(
+                TokenUsage {
+                    input_tokens: 1_000,
+                    output_tokens: 200,
+                    total_tokens: 1_200,
+                },
+            )))
+            .expect("send usage");
+        sender
+            .send(WorkflowUiEvent::Progress(WorkflowProgress::Stage(
+                "Labeling 3 articles…".to_string(),
+            )))
+            .expect("send stage");
+
+        model.poll_workflow_events();
+
+        assert_eq!(model.total_input_tokens, 1_000);
+        assert_eq!(model.total_output_tokens, 200);
+        assert!(model.progress_note.is_none());
+
+        model.poll_workflow_events();
+
+        assert_eq!(model.progress_note.as_deref(), Some("Labeling 3 articles…"));
+        assert_eq!(model.displayed_token_counts(), (1_000, 200));
     }
 
     #[test]
@@ -768,6 +901,15 @@ mod tests {
                 "Filtering 1 headlines…".to_string(),
             )))
             .expect("send stage");
+        sender
+            .send(WorkflowUiEvent::Progress(WorkflowProgress::Usage(
+                TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    total_tokens: 120,
+                },
+            )))
+            .expect("send usage");
         model.poll_workflow_events();
 
         let line = model
@@ -775,6 +917,8 @@ mod tests {
             .expect("live row");
         assert!(line.contains("Nvidia faces AI chip export rules"));
         assert!(model.footer_plain_line().contains("Filtering 1 headlines…"));
+        assert_eq!(model.total_input_tokens, 100);
+        assert_eq!(model.total_output_tokens, 20);
 
         sender
             .send(WorkflowUiEvent::Done(Err("network failed".to_string())))

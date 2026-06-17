@@ -129,11 +129,12 @@ impl AppModel {
     }
 
     pub(crate) fn footer_plain_line(&self) -> String {
-        let tokens = if self.total_input_tokens > 0 || self.total_output_tokens > 0 {
+        let (input_tokens, output_tokens) = self.displayed_token_counts();
+        let tokens = if input_tokens > 0 || output_tokens > 0 {
             format!(
                 "{} → {}",
-                format_int_with_commas(self.total_input_tokens),
-                format_int_with_commas(self.total_output_tokens)
+                format_int_with_commas(input_tokens),
+                format_int_with_commas(output_tokens)
             )
         } else {
             "(none)".to_string()

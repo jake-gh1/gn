@@ -25,6 +25,12 @@ fn emit(progress: &ProgressSink, event: WorkflowProgress) {
     (**progress)(event);
 }
 
+fn emit_usage(progress: &ProgressSink, usage: &TokenUsage) {
+    if usage.input_tokens > 0 || usage.output_tokens > 0 || usage.total_tokens > 0 {
+        emit(progress, WorkflowProgress::Usage(usage.clone()));
+    }
+}
+
 const NEWS_LLM_CHUNK_SIZE: usize = 20;
 const NEWS_LLM_MAX_CONCURRENCY: usize = 5;
 const NEWS_LABEL_MIN_WORDS: usize = 2;
@@ -562,7 +568,12 @@ impl DefaultWorkflowEngine {
                 WorkflowProgress::Stage(format!("Filtering {} headlines…", missing_items.len())),
             );
             let (fresh_decisions, usage) = self
-                .news_relevance_decisions(&missing_items, build_prompt, context.error_label)
+                .news_relevance_decisions(
+                    &missing_items,
+                    build_prompt,
+                    context.error_label,
+                    progress,
+                )
                 .await?;
             add_token_usage(&mut workflow_usage, &usage);
             for (idx, relevant) in missing_indices.into_iter().zip(fresh_decisions) {
@@ -679,6 +690,7 @@ impl DefaultWorkflowEngine {
         items: &[(String, String)],
         build_prompt: impl Fn(&[(String, String)]) -> String,
         error_label: &str,
+        progress: &ProgressSink,
     ) -> Result<(Vec<bool>, TokenUsage)> {
         if items.is_empty() {
             return Ok((Vec::new(), TokenUsage::default()));
@@ -689,7 +701,7 @@ impl DefaultWorkflowEngine {
             .iter()
             .map(|chunk| build_prompt(chunk))
             .collect::<Vec<_>>();
-        let responses = complete_news_chunks_in_parallel(&self.llm, prompts, true).await;
+        let responses = complete_news_chunks_in_parallel(&self.llm, prompts, true, progress).await;
 
         let mut decisions = Vec::with_capacity(items.len());
         let mut total_usage = TokenUsage::default();
@@ -754,7 +766,7 @@ impl DefaultWorkflowEngine {
             .iter()
             .map(|chunk| build_news_editorial_label_prompt(context, chunk))
             .collect();
-        let responses = complete_news_chunks_in_parallel(&self.llm, prompts, true).await;
+        let responses = complete_news_chunks_in_parallel(&self.llm, prompts, true, progress).await;
 
         let mut total_usage = TokenUsage::default();
         let mut accepted_labels = Vec::with_capacity(items.len());
@@ -781,6 +793,7 @@ impl DefaultWorkflowEngine {
                         raw_label.as_deref().unwrap_or_default(),
                         excluded_terms,
                         &mut total_usage,
+                        progress,
                     )
                     .await?;
                 accepted_labels.push((item.article_idx, label));
@@ -801,6 +814,7 @@ impl DefaultWorkflowEngine {
         raw_label: &str,
         excluded_terms: &HashSet<String>,
         total_usage: &mut TokenUsage,
+        progress: &ProgressSink,
     ) -> Result<String> {
         let current_reason =
             match validate_editorial_label(raw_label, &item.publisher, &item.title, excluded_terms)
@@ -824,6 +838,7 @@ impl DefaultWorkflowEngine {
             })
             .await?;
         add_token_usage(total_usage, &completion.usage);
+        emit_usage(progress, &completion.usage);
         let Some(labels) = parse_news_editorial_labels(&completion.text, 1) else {
             debug_log(
                 "coverage",
@@ -1160,13 +1175,15 @@ async fn complete_news_chunks_in_parallel(
     llm: &Arc<dyn LlmClient>,
     prompts: Vec<String>,
     json_mode: bool,
+    progress: &ProgressSink,
 ) -> Vec<Result<CompletionResponse>> {
     let semaphore = Arc::new(Semaphore::new(NEWS_LLM_MAX_CONCURRENCY));
-    let mut handles = Vec::with_capacity(prompts.len());
-    for prompt in prompts {
+    let mut handles = tokio::task::JoinSet::new();
+    let expected_len = prompts.len();
+    for (idx, prompt) in prompts.into_iter().enumerate() {
         let llm = Arc::clone(llm);
         let semaphore = Arc::clone(&semaphore);
-        handles.push(tokio::spawn(async move {
+        handles.spawn(async move {
             let _permit = semaphore
                 .acquire()
                 .await
@@ -1175,17 +1192,36 @@ async fn complete_news_chunks_in_parallel(
                 "workflow",
                 format!("send llm chunk prompt_chars={}", prompt.len()),
             );
-            llm.complete(CompletionRequest { prompt, json_mode }).await
-        }));
-    }
-    let mut out = Vec::with_capacity(handles.len());
-    for handle in handles {
-        out.push(match handle.await {
-            Ok(result) => result,
-            Err(join_err) => Err(anyhow::anyhow!("news chunk task join error: {join_err}")),
+            (
+                idx,
+                llm.complete(CompletionRequest { prompt, json_mode }).await,
+            )
         });
     }
-    out
+    let mut out = std::iter::repeat_with(|| None)
+        .take(expected_len)
+        .collect::<Vec<_>>();
+    while let Some(joined) = handles.join_next().await {
+        match joined {
+            Ok((idx, result)) => {
+                if let Ok(response) = &result {
+                    emit_usage(progress, &response.usage);
+                }
+                out[idx] = Some(result);
+            }
+            Err(join_err) => {
+                let result = Err(anyhow::anyhow!("news chunk task join error: {join_err}"));
+                if let Some(slot) = out.iter_mut().find(|slot| slot.is_none()) {
+                    *slot = Some(result);
+                } else {
+                    out.push(Some(result));
+                }
+            }
+        }
+    }
+    out.into_iter()
+        .map(|result| result.unwrap_or_else(|| Err(anyhow::anyhow!("news chunk task missing"))))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1685,7 +1721,9 @@ mod workflow_tests {
             .iter()
             .filter_map(|event| match event {
                 WorkflowProgress::Snapshot(articles) => Some(articles.clone()),
-                WorkflowProgress::Stage(_) | WorkflowProgress::Identity(_) => None,
+                WorkflowProgress::Stage(_)
+                | WorkflowProgress::Identity(_)
+                | WorkflowProgress::Usage(_) => None,
             })
             .collect::<Vec<_>>();
         assert!(snapshots.len() >= 3);

@@ -116,6 +116,8 @@ impl AppModel {
         self.started_at = std::time::Instant::now();
         self.run_started_at = std::time::SystemTime::now();
         self.completed_elapsed = None;
+        self.run_reported_input_tokens = 0;
+        self.run_reported_output_tokens = 0;
 
         let Some(workflow_runtime) = self.workflow_runtime.as_ref() else {
             self.set_status_message("Workflow unavailable: no workflow engine is configured.");
@@ -205,6 +207,7 @@ impl AppModel {
         match event {
             WorkflowUiEvent::Progress(WorkflowProgress::Stage(note)) => {
                 debug_log("ui", format!("workflow progress stage={note}"));
+                self.finish_token_display();
                 self.progress_note = Some(note);
                 false
             }
@@ -225,12 +228,24 @@ impl AppModel {
                     "ui",
                     format!("workflow progress snapshot articles={}", articles.len()),
                 );
+                self.finish_token_display();
                 self.live_articles = Some(articles);
                 self.story_menu_focused = self.news_article_row_count() > 0;
                 self.story_menu_highlight = self
                     .story_menu_highlight
                     .min(self.news_article_row_count().saturating_sub(1));
                 false
+            }
+            WorkflowUiEvent::Progress(WorkflowProgress::Usage(usage)) => {
+                debug_log(
+                    "ui",
+                    format!(
+                        "workflow progress usage in_tokens={} out_tokens={}",
+                        usage.input_tokens, usage.output_tokens
+                    ),
+                );
+                self.record_progress_usage(usage.input_tokens, usage.output_tokens);
+                true
             }
             WorkflowUiEvent::Done(Ok(result)) => {
                 let result = *result;
@@ -247,12 +262,14 @@ impl AppModel {
                 self.record_search_run_nonfatal(search_term, &result);
                 self.status_message = (!result.answer.is_empty()).then(|| result.answer.clone());
                 self.handle_step_complete(STEP_LABEL, result, fallback_label);
+                self.finish_token_display();
                 self.clear_live_workflow_state();
                 true
             }
             WorkflowUiEvent::Done(Err(err)) => {
                 self.completed_elapsed = Some(self.started_at.elapsed());
                 debug_log("ui", format!("workflow failed err={err}"));
+                self.finish_token_display();
                 self.clear_live_workflow_state();
                 self.set_status_message(&format!("Workflow failed: {err}"));
                 true
@@ -335,7 +352,7 @@ impl AppModel {
                 .map(|identity| identity.company_name.clone())
                 .unwrap_or(result_label),
         ];
-        self.record_usage(result.usage.input_tokens, result.usage.output_tokens);
+        self.record_usage_remainder(result.usage.input_tokens, result.usage.output_tokens);
         self.remember_workflow_cache_snapshot(&result);
         self.story_menu_focused = !self.news_article_rows().is_empty();
         self.story_menu_highlight = 0;
@@ -378,12 +395,24 @@ impl AppModel {
 
     pub(crate) fn sync_ui_state(&mut self) {
         self.poll_workflow_events();
+        self.sync_token_display();
         self.sync_runtime_config_if_changed();
     }
 
-    pub(crate) fn record_usage(&mut self, input_tokens: u32, output_tokens: u32) {
-        self.total_input_tokens += input_tokens as usize;
-        self.total_output_tokens += output_tokens as usize;
+    pub(crate) fn record_progress_usage(&mut self, input_tokens: u32, output_tokens: u32) {
+        let input_tokens = input_tokens as usize;
+        let output_tokens = output_tokens as usize;
+        self.total_input_tokens += input_tokens;
+        self.total_output_tokens += output_tokens;
+        self.run_reported_input_tokens += input_tokens;
+        self.run_reported_output_tokens += output_tokens;
+    }
+
+    pub(crate) fn record_usage_remainder(&mut self, input_tokens: u32, output_tokens: u32) {
+        let input_tokens = input_tokens as usize;
+        let output_tokens = output_tokens as usize;
+        self.total_input_tokens += input_tokens.saturating_sub(self.run_reported_input_tokens);
+        self.total_output_tokens += output_tokens.saturating_sub(self.run_reported_output_tokens);
     }
 
     pub(crate) fn select_story_root(&mut self, root_idx: usize) {
