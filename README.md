@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/news-coverage-4.png" alt="gn news coverage workflow" width="100%" />
+  <img src="images/news-coverage-5.png" alt="gn news coverage workflow" width="100%" />
 </p>
 <strong>gn</strong> gets, filters, and labels news.
 <br />Use <strong><a href="./docs/config.md">local or cloud LLMs</a></strong>.

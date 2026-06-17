@@ -2,7 +2,7 @@
 
 **[gn](https://github.com/jake-gh1/gn)** gets, filters, and labels news.
 
-![gn news coverage example](../images/news-coverage-4.png)
+![gn news coverage example](../images/news-coverage-5.png)
 
 Articles come from **[Google News](https://news.google.com/)** and fall back to **[Bing News](https://news.bing.com/)**.
 
