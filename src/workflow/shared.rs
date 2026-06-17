@@ -36,11 +36,11 @@ pub(crate) fn build_query_news_relevance_prompt(query: &str, items: &[(String, S
                 .join("\n")
         );
         format!(
-            "{query_context}\n\nDecide whether each news article title is relevant enough to show for this news search.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search terms, title, and publisher only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in at least one search term.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match a search term.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n"
+            "{query_context}\n\nDecide whether each news article title is relevant enough to show for this news search.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search terms, title, and publisher only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in at least one search term.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match a search term.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n"
         )
     } else {
         format!(
-            "Search query: {}\n\nDecide whether each news article title is relevant enough to show for this news query.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search query, title, and publisher only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in the search query.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match the query.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
+            "Search query: {}\n\nDecide whether each news article title is relevant enough to show for this news query.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search query, title, and publisher only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in the search query.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match the query.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
             query.trim()
         )
     };
@@ -61,7 +61,7 @@ fn append_titles_block(body: &mut String, items: &[(String, String)]) {
 
 fn build_news_relevance_prompt_header(identity: &CompanyIdentity) -> String {
     format!(
-        "Company context: {name} ({ticker})\n\nDecide whether each news article title is relevant enough to show in a company-specific news list.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the title and publisher only; do not infer from outside knowledge unless the title names a recognizable brand, subsidiary, product, executive, regulator, customer, supplier, partner, or competitor relationship for {name}.\n- Include a title only when it is clearly about {name}, its ticker {ticker}, or a concrete business relationship affecting {name}.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles.\n- Exclude titles where the company is only one ticker in a generic mover/watchlist item.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
+        "Company context: {name} ({ticker})\n\nDecide whether each news article title is relevant enough to show in a company-specific news list.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the title and publisher only; do not infer from outside knowledge unless the title names a recognizable brand, subsidiary, product, executive, regulator, customer, supplier, partner, or competitor relationship for {name}.\n- Include a title only when it is clearly about {name}, its ticker {ticker}, or a concrete business relationship affecting {name}.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles.\n- Exclude titles where the company is only one ticker in a generic mover/watchlist item.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
         name = identity.company_name,
         ticker = identity.ticker
     )
@@ -297,6 +297,28 @@ mod tests {
         assert!(prompt.contains("Search alternatives (an article may match any one):"));
         assert!(prompt.contains("- msft\n- aapl\n- nvda"));
         assert!(prompt.contains("at least one search term"));
+    }
+
+    #[test]
+    fn relevance_prompts_exclude_company_profile_pages() {
+        let company_prompt = build_news_relevance_prompt(
+            &CompanyIdentity {
+                ticker: "GOOG".to_string(),
+                company_name: "Alphabet Inc.".to_string(),
+            },
+            &[("Engadget".to_string(), "Google".to_string())],
+        );
+        let query_prompt = build_query_news_relevance_prompt(
+            "google",
+            &[("Engadget".to_string(), "Google".to_string())],
+        );
+
+        for prompt in [company_prompt, query_prompt] {
+            assert!(
+                prompt.contains("Exclude company profile, tag, topic, landing, or directory pages")
+            );
+            assert!(prompt.contains("with no concrete news event"));
+        }
     }
 
     #[test]

@@ -568,20 +568,8 @@ fn clean_news_title(title: &str, source_name: &str) -> String {
     }
 }
 
-fn is_non_article_news_result(title: &str, url: &str) -> bool {
+fn is_non_article_news_result(title: &str, _url: &str) -> bool {
     let title = title.trim().to_ascii_lowercase();
-    let normalized_url = normalize_url(url);
-    let path = normalized_url
-        .split_once('/')
-        .map(|(_, path)| path)
-        .unwrap_or("");
-    if path
-        .split('/')
-        .any(|segment| matches!(segment, "video" | "videos"))
-    {
-        return true;
-    }
-
     let non_article_title_phrases = [
         "stock overview",
         "advanced charts",
@@ -598,26 +586,6 @@ fn is_non_article_news_result(title: &str, url: &str) -> bool {
     if non_article_title_phrases
         .iter()
         .any(|phrase| title.contains(phrase))
-    {
-        return true;
-    }
-
-    let non_article_path_parts = [
-        "/quote/",
-        "/market-data/stocks/",
-        "/stocks/",
-        "/investing/stock/",
-        "/companies/",
-        "/equities/",
-        "/securities/",
-        "/chart",
-        "/charts",
-        "/financials",
-        "/profile",
-    ];
-    if non_article_path_parts
-        .iter()
-        .any(|part| path.contains(part.trim_start_matches('/')))
     {
         return true;
     }
@@ -1168,42 +1136,6 @@ mod tests {
         assert_eq!(
             titles,
             vec!["Apple settles lawsuit over late Siri AI features for $250 million"]
-        );
-    }
-
-    #[test]
-    fn news_articles_drop_video_pages_by_path_segment() {
-        let articles = build_news_articles(
-            &[
-                result(
-                    "CNBC",
-                    "Lilly's powerful new weight loss drug impresses",
-                    "https://www.cnbc.com/video/2026/06/08/lillys-powerful-new-weight-loss-drug-impresses.html",
-                    1,
-                ),
-                result(
-                    "Bloomberg",
-                    "Novo raises forecast as Wegovy pill fuels sales",
-                    "https://www.bloomberg.com/news/videos/2026-05-06/novo-raises-forecast-video",
-                    1,
-                ),
-                result(
-                    "Reuters",
-                    "Video game sales rise on strong console demand",
-                    "https://www.reuters.com/technology/video-game-sales-rise",
-                    1,
-                ),
-            ],
-            &[],
-        );
-
-        let titles = articles
-            .iter()
-            .map(|article| article.title.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            titles,
-            vec!["Video game sales rise on strong console demand"]
         );
     }
 }
