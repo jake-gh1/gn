@@ -186,21 +186,6 @@ pub(crate) fn format_int_with_commas(value: usize) -> String {
     out.chars().rev().collect()
 }
 
-pub(crate) fn format_elapsed_time(duration: Duration) -> String {
-    let total_secs = duration.as_secs();
-    let hours = total_secs / 3_600;
-    let minutes = (total_secs % 3_600) / 60;
-    let seconds = total_secs % 60;
-
-    if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
-    }
-}
-
 pub(crate) fn truncate_footer_text(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();

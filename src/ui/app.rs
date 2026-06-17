@@ -74,6 +74,7 @@ pub struct AppModel {
     pub(crate) total_input_tokens: usize,
     pub(crate) total_output_tokens: usize,
     pub(crate) started_at: Instant,
+    pub(crate) run_started_at: SystemTime,
     pub(crate) completed_elapsed: Option<Duration>,
     pub(crate) cached_news: HashMap<String, CachedNews>,
     pub(crate) new_article_keys: HashMap<String, HashSet<String>>,
@@ -130,6 +131,7 @@ impl AppModel {
             total_input_tokens: 0,
             total_output_tokens: 0,
             started_at: Instant::now(),
+            run_started_at: SystemTime::now(),
             completed_elapsed: None,
             cached_news: HashMap::new(),
             new_article_keys: HashMap::new(),
@@ -486,6 +488,32 @@ mod tests {
             model.active_model_label(),
             Some("openai/gpt-5.4".to_string())
         );
+    }
+
+    #[test]
+    fn footer_prints_run_timestamp() {
+        let mut model = AppModel::new(RuntimeConfig::default());
+        model.run_started_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        model.completed_elapsed = Some(Duration::from_secs(83));
+        model.total_input_tokens = 1_408;
+        model.total_output_tokens = 207;
+
+        let line = model.footer_plain_line();
+        let timestamp = line
+            .rsplit(" · @")
+            .next()
+            .expect("timestamp field");
+
+        assert!(!line.contains("Model:"));
+        assert!(!line.contains("Tokens:"));
+        assert!(!line.contains("Timestamp:"));
+        assert!(line.contains(" · 1,408 → 207 · @"));
+        assert_eq!(timestamp.chars().nth(2), Some(':'));
+        assert_eq!(timestamp.chars().nth(5), Some(':'));
+        assert_eq!(timestamp.chars().count(), 8);
+        assert!(!timestamp.contains('T'));
+        assert!(!line.contains(" · Ran: "));
+        assert!(!line.contains(" · Time: "));
     }
 
     #[test]

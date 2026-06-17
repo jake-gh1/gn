@@ -114,6 +114,7 @@ impl AppModel {
 
         let fallback_label = workflow_fallback_label(&request);
         self.started_at = std::time::Instant::now();
+        self.run_started_at = std::time::SystemTime::now();
         self.completed_elapsed = None;
 
         let Some(workflow_runtime) = self.workflow_runtime.as_ref() else {

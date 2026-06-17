@@ -1,11 +1,13 @@
 //! Final viewport assembly and scroll targeting for the terminal UI.
 
+use chrono::{DateTime, Local};
 use ratatui::text::Text;
+use std::time::SystemTime;
 
 use crate::config::ModelConfig;
 use crate::ui::{
-    AppModel, BOTTOM_BLOCK_ROWS, LEFT_PAD, center_target_top, format_elapsed_time,
-    format_int_with_commas, normalize_view_lines, truncate_footer_text, window_view_lines,
+    AppModel, BOTTOM_BLOCK_ROWS, LEFT_PAD, center_target_top, format_int_with_commas,
+    normalize_view_lines, truncate_footer_text, window_view_lines,
 };
 
 impl AppModel {
@@ -129,7 +131,7 @@ impl AppModel {
     pub(crate) fn footer_plain_line(&self) -> String {
         let tokens = if self.total_input_tokens > 0 || self.total_output_tokens > 0 {
             format!(
-                "{} -> {}",
+                "{} → {}",
                 format_int_with_commas(self.total_input_tokens),
                 format_int_with_commas(self.total_output_tokens)
             )
@@ -143,13 +145,10 @@ impl AppModel {
             line.push_str(value);
         }
         line.push_str(&format!(
-            " · Model: {} · Tokens: {} · Time: {}",
+            " · {} · {} · @{}",
             self.current_model_label(),
-            tokens.replace("->", "→"),
-            format_elapsed_time(
-                self.completed_elapsed
-                    .unwrap_or_else(|| self.started_at.elapsed()),
-            )
+            tokens,
+            format_run_timestamp(self.run_started_at)
         ));
         if let Some(note) = self
             .progress_note
@@ -187,6 +186,11 @@ impl AppModel {
             .map(strip_provider_label)
             .unwrap_or_else(|| "none".to_string())
     }
+}
+
+fn format_run_timestamp(value: SystemTime) -> String {
+    let timestamp: DateTime<Local> = value.into();
+    timestamp.format("%H:%M:%S").to_string()
 }
 
 fn is_ticker_symbol_like(value: &str) -> bool {
