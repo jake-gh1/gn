@@ -1178,12 +1178,12 @@ async fn complete_news_chunks_in_parallel(
     progress: &ProgressSink,
 ) -> Vec<Result<CompletionResponse>> {
     let semaphore = Arc::new(Semaphore::new(NEWS_LLM_MAX_CONCURRENCY));
-    let mut handles = tokio::task::JoinSet::new();
-    let expected_len = prompts.len();
-    for (idx, prompt) in prompts.into_iter().enumerate() {
+    let mut handles = Vec::with_capacity(prompts.len());
+    for prompt in prompts {
         let llm = Arc::clone(llm);
         let semaphore = Arc::clone(&semaphore);
-        handles.spawn(async move {
+        let progress = Arc::clone(progress);
+        handles.push(tokio::spawn(async move {
             let _permit = semaphore
                 .acquire()
                 .await
@@ -1192,36 +1192,21 @@ async fn complete_news_chunks_in_parallel(
                 "workflow",
                 format!("send llm chunk prompt_chars={}", prompt.len()),
             );
-            (
-                idx,
-                llm.complete(CompletionRequest { prompt, json_mode }).await,
-            )
+            let result = llm.complete(CompletionRequest { prompt, json_mode }).await;
+            if let Ok(response) = &result {
+                emit_usage(&progress, &response.usage);
+            }
+            result
+        }));
+    }
+    let mut out = Vec::with_capacity(handles.len());
+    for handle in handles {
+        out.push(match handle.await {
+            Ok(result) => result,
+            Err(join_err) => Err(anyhow::anyhow!("news chunk task join error: {join_err}")),
         });
     }
-    let mut out = std::iter::repeat_with(|| None)
-        .take(expected_len)
-        .collect::<Vec<_>>();
-    while let Some(joined) = handles.join_next().await {
-        match joined {
-            Ok((idx, result)) => {
-                if let Ok(response) = &result {
-                    emit_usage(progress, &response.usage);
-                }
-                out[idx] = Some(result);
-            }
-            Err(join_err) => {
-                let result = Err(anyhow::anyhow!("news chunk task join error: {join_err}"));
-                if let Some(slot) = out.iter_mut().find(|slot| slot.is_none()) {
-                    *slot = Some(result);
-                } else {
-                    out.push(Some(result));
-                }
-            }
-        }
-    }
-    out.into_iter()
-        .map(|result| result.unwrap_or_else(|| Err(anyhow::anyhow!("news chunk task missing"))))
-        .collect()
+    out
 }
 
 #[cfg(test)]
