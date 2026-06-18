@@ -9,11 +9,11 @@
 
 ## Get Started
 ### Install
-#### macOS
+**macOS**
 ```zsh
 curl -fsSL https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.sh | sh
 ```
-#### Windows
+**Windows**
 ```zsh
 irm https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.ps1 | iex
 ```
