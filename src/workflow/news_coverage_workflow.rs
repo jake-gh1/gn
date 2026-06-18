@@ -99,7 +99,7 @@ enum CoverageQueryTerm {
 
 #[derive(Debug, Deserialize)]
 struct RawNewsEditorialLabel {
-    #[serde(default, alias = "index", alias = "number")]
+    #[serde(default, alias = "index", alias = "number", alias = "article")]
     id: Option<serde_json::Value>,
     #[serde(default, alias = "tag", alias = "title", alias = "name")]
     label: Option<String>,
@@ -839,7 +839,18 @@ impl DefaultWorkflowEngine {
             .await?;
         add_token_usage(total_usage, &completion.usage);
         emit_usage(progress, &completion.usage);
-        let Some(labels) = parse_news_editorial_labels(&completion.text, 1) else {
+        // Prefer the structurally parsed label, then fall back to any raw
+        // label fragments (latest correction first) the model emitted.
+        let mut candidates: Vec<String> = parse_news_editorial_labels(&completion.text, 1)
+            .and_then(|labels| labels.into_iter().next().flatten())
+            .into_iter()
+            .collect();
+        for fragment in editorial_label_fragments(&completion.text).into_iter().rev() {
+            if !candidates.contains(&fragment) {
+                candidates.push(fragment);
+            }
+        }
+        if candidates.is_empty() {
             debug_log(
                 "coverage",
                 format!(
@@ -849,21 +860,17 @@ impl DefaultWorkflowEngine {
                 ),
             );
             return Ok(NEWS_LABEL_PLACEHOLDER.to_string());
-        };
-        let final_reason = match validate_editorial_label(
-            labels
-                .into_iter()
-                .next()
-                .flatten()
-                .as_deref()
-                .unwrap_or_default(),
-            &item.publisher,
-            &item.title,
-            excluded_terms,
-        ) {
-            Ok(label) => return Ok(label),
-            Err(reason) => reason,
-        };
+        }
+
+        let mut final_reason = None;
+        for candidate in &candidates {
+            match validate_editorial_label(candidate, &item.publisher, &item.title, excluded_terms) {
+                Ok(label) => return Ok(label),
+                Err(reason) => {
+                    final_reason.get_or_insert(reason);
+                }
+            }
+        }
 
         debug_log(
             "coverage",
@@ -871,7 +878,7 @@ impl DefaultWorkflowEngine {
                 "news label editorial request returned invalid label; using placeholder title={:?} label={:?} reason={}",
                 item.title,
                 raw_label,
-                final_reason.prompt_text()
+                final_reason.map_or("", NewsLabelInvalidReason::prompt_text)
             ),
         );
         Ok(NEWS_LABEL_PLACEHOLDER.to_string())
@@ -984,7 +991,7 @@ fn build_news_editorial_label_repair_prompt(
         )
     };
     format!(
-        "{context}\n\nRepair one editorial tag for a dense news table.\n\nRules:\n- Return ONLY a JSON object: {{\"items\":[{{\"label\":\"2-3 word tag\"}}]}}.\n- Return exactly one item.\n- Use Title Case with no trailing punctuation.\n- Never use \"News\" as a label.\n- Do not repeat the active company name or ticker from the context.{disallowed_line}\n- If the invalid label repeats a disallowed term, remove that term and preserve the remaining concrete action or topic when it still satisfies the rules.\n- Avoid vague abstractions; use the concrete event, product, policy, deal, market, executive, or compensation topic when available.\n- Use only the title and publisher below; do not add outside facts.\n\nInvalid label: {}\nProblem: {}\n\nPublisher: {}\nTitle: {}\n",
+        "{context}\n\nRepair one editorial tag for a dense news table.\n\nRules:\n- Return ONLY this JSON shape with no markdown fences: {{\"items\":[{{\"label\":\"2-3 word tag\"}}]}}.\n- Return exactly one item.\n- The label must be 2 or 3 words; never return a one-word label.\n- Use Title Case with no trailing punctuation.\n- Never use \"News\" as a label.\n- Do not repeat the active company name or ticker from the context.{disallowed_line}\n- If the invalid label repeats a disallowed term, remove that term and preserve the remaining concrete action or topic when it still satisfies the rules.\n- Avoid vague abstractions; use the concrete event, product, policy, deal, market, executive, or compensation topic when available.\n- Use only the title and publisher below; do not add outside facts.\n\nInvalid label: {}\nProblem: {}\n\nPublisher: {}\nTitle: {}\n",
         invalid_label.trim(),
         reason.prompt_text(),
         item.publisher.trim(),
@@ -1004,8 +1011,44 @@ fn sorted_label_terms(terms: &HashSet<String>) -> Vec<String> {
 }
 
 fn parse_news_editorial_labels(text: &str, expected_len: usize) -> Option<Vec<Option<String>>> {
-    let value = parse_first_json_value(text)?;
-    let items = news_editorial_label_items_from_value(&value)?;
+    if let Some(labels) = parse_first_json_value(text)
+        .and_then(|value| news_editorial_labels_from_value(&value, expected_len))
+    {
+        return Some(labels);
+    }
+    labels_from_editorial_label_fragments(text, expected_len)
+}
+
+fn news_editorial_labels_from_value(
+    value: &serde_json::Value,
+    expected_len: usize,
+) -> Option<Vec<Option<String>>> {
+    match value {
+        serde_json::Value::Array(items) => labels_from_editorial_label_items(items, expected_len),
+        serde_json::Value::Object(map) => {
+            for nested in editorial_label_container_values(map) {
+                if let Some(labels) = news_editorial_labels_from_value(nested, expected_len) {
+                    return Some(labels);
+                }
+            }
+
+            if let Some(labels) = labels_from_editorial_label_map(map, expected_len) {
+                return Some(labels);
+            }
+
+            (expected_len == 1)
+                .then(|| editorial_label_from_value(value).map(|label| vec![Some(label)]))
+                .flatten()
+        }
+        serde_json::Value::String(label) => (expected_len == 1).then(|| vec![Some(label.clone())]),
+        _ => None,
+    }
+}
+
+fn labels_from_editorial_label_items(
+    items: &[serde_json::Value],
+    expected_len: usize,
+) -> Option<Vec<Option<String>>> {
     let has_ids = items.iter().any(editorial_label_has_id);
     if has_ids {
         let mut labels = vec![None; expected_len];
@@ -1027,20 +1070,86 @@ fn parse_news_editorial_labels(text: &str, expected_len: usize) -> Option<Vec<Op
     (labels.len() == expected_len).then_some(labels)
 }
 
-fn news_editorial_label_items_from_value(
-    value: &serde_json::Value,
-) -> Option<&[serde_json::Value]> {
-    match value {
-        serde_json::Value::Array(items) => Some(items),
-        serde_json::Value::Object(map) => {
-            const CONTAINER_KEYS: &[&str] = &["labels", "tags", "articles", "items", "output"];
-            CONTAINER_KEYS
-                .iter()
-                .filter_map(|key| map.get(*key))
-                .find_map(news_editorial_label_items_from_value)
+fn editorial_label_container_values(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> impl Iterator<Item = &serde_json::Value> {
+    const CONTAINER_KEYS: &[&str] = &["labels", "tags", "articles", "items", "output"];
+    CONTAINER_KEYS.iter().filter_map(|key| map.get(*key))
+}
+
+fn labels_from_editorial_label_map(
+    map: &serde_json::Map<String, serde_json::Value>,
+    expected_len: usize,
+) -> Option<Vec<Option<String>>> {
+    let mut labels = vec![None; expected_len];
+    let mut saw_numeric_key = false;
+    for (key, value) in map {
+        let Ok(id) = key.trim().parse::<usize>() else {
+            continue;
+        };
+        saw_numeric_key = true;
+        if !(1..=expected_len).contains(&id) || labels[id - 1].is_some() {
+            continue;
         }
-        _ => None,
+        if let Some(label) = editorial_label_from_value(value) {
+            labels[id - 1] = Some(label);
+        }
     }
+    saw_numeric_key.then_some(labels)
+}
+
+fn labels_from_editorial_label_fragments(
+    text: &str,
+    expected_len: usize,
+) -> Option<Vec<Option<String>>> {
+    let labels = editorial_label_fragments(text);
+    if labels.len() == expected_len {
+        return Some(labels.into_iter().map(Some).collect());
+    }
+    if expected_len == 1 {
+        return labels.into_iter().last().map(|label| vec![Some(label)]);
+    }
+    None
+}
+
+fn editorial_label_fragments(text: &str) -> Vec<String> {
+    const KEYS: &[&str] = &["label", "tag", "title", "name"];
+    let mut labels = Vec::new();
+    for (idx, _) in text.char_indices() {
+        for key in KEYS {
+            let Some(label) = label_fragment_at(text, idx, key) else {
+                continue;
+            };
+            labels.push((idx, label));
+        }
+    }
+    labels.sort_by_key(|(idx, _)| *idx);
+    labels.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+    labels.into_iter().map(|(_, label)| label).collect()
+}
+
+fn label_fragment_at(text: &str, idx: usize, key: &str) -> Option<String> {
+    let rest = text.get(idx..)?;
+    let key_start = rest
+        .strip_prefix(&format!(r#""{key}""#))
+        .or_else(|| rest.strip_prefix(&format!(r#""""{key}""#)))?;
+    let value_start = key_start.trim_start().strip_prefix(':')?.trim_start();
+    let value_start = value_start.strip_prefix('"')?;
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in value_start.chars() {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => return Some(value),
+            _ => value.push(ch),
+        }
+    }
+    None
 }
 
 fn editorial_label_has_id(value: &serde_json::Value) -> bool {
@@ -1266,6 +1375,74 @@ mod unit_tests {
     fn editorial_labels_reject_partial_positional_output() {
         assert!(
             parse_news_editorial_labels(r#"{"items":[{"label":"AI Stock Shorts"}]}"#, 2).is_none()
+        );
+    }
+
+    #[test]
+    fn editorial_labels_parse_single_repair_object() {
+        let labels = parse_news_editorial_labels(r#"{"label":"AI Stock Shorts"}"#, 1)
+            .expect("single repair label");
+
+        assert_eq!(labels, vec![Some("AI Stock Shorts".to_string())]);
+    }
+
+    #[test]
+    fn editorial_labels_parse_nested_single_repair_string() {
+        let labels = parse_news_editorial_labels(r#"{"labels":"AI Stock Shorts"}"#, 1)
+            .expect("nested single repair label");
+
+        assert_eq!(labels, vec![Some("AI Stock Shorts".to_string())]);
+    }
+
+    #[test]
+    fn editorial_labels_parse_numeric_map_output() {
+        let labels = parse_news_editorial_labels(
+            r#"{"items":{"2":"Export Rule Changes","1":{"label":"Data Center Expansion"}}}"#,
+            2,
+        )
+        .expect("numeric map labels");
+
+        assert_eq!(
+            labels,
+            vec![
+                Some("Data Center Expansion".to_string()),
+                Some("Export Rule Changes".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn editorial_labels_repair_duplicated_key_quotes() {
+        let labels = parse_news_editorial_labels(
+            "```json\n{\"items\":[{\"\"label\":\"Secret Society\"}]}\n```",
+            1,
+        )
+        .expect("duplicated key quote label");
+
+        assert_eq!(labels, vec![Some("Secret Society".to_string())]);
+    }
+
+    #[test]
+    fn editorial_labels_extract_malformed_single_label_fragment() {
+        let labels = parse_news_editorial_labels(
+            "```json\n{\"items\":[{\"\"label\":\"Solar Power\"]]}\n```",
+            1,
+        )
+        .expect("malformed single label fragment");
+
+        assert_eq!(labels, vec![Some("Solar Power".to_string())]);
+    }
+
+    #[test]
+    fn editorial_label_fragments_preserve_correction_order() {
+        let labels = editorial_label_fragments(
+            "```json\n{\"items\":[{\"\"label\":\"Relocation News\"}]}\n```\n\
+             Correction:\n```json\n{\"items\":[{\"\"label\":\"Relocation Move\"}]}\n```",
+        );
+
+        assert_eq!(
+            labels,
+            vec!["Relocation News".to_string(), "Relocation Move".to_string()]
         );
     }
 }
