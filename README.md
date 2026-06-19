@@ -6,7 +6,6 @@
 <br />For details, read <strong><a href="./docs/workflow.md">docs/workflow.md</a></strong>.
 
 ---
-
 ## Get Started
 ### Install & Run
 **macOS**
@@ -18,13 +17,11 @@ curl -fsSL https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.
 irm https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.ps1 | iex
 ```
 Run `gn` to create or edit the runtime config. For details, see **[docs/config.md](docs/config.md)**.
-
 **Commands**
 ```zsh
 gn msft         # search
    --model      # change model
 ```
-
 ## Docs
 - **[docs/config.md](docs/config.md)**
 - **[docs/workflow.md](docs/workflow.md)**
