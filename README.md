@@ -20,8 +20,8 @@ Run `gn` to create or edit the runtime config. For details, see **[docs/config.m
 
 **Commands**
 ```zsh
-gn msft         # search
-   --model      # change model
+gn msft     # search
+   --model  # change model
 ```
 ## Docs
 - **[docs/config.md](docs/config.md)**
