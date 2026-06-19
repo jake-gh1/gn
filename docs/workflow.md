@@ -8,7 +8,7 @@ Articles come from **[Google News](https://news.google.com/)** and fall back to 
 
 ```zsh
 gn msft            # search
-   msft / compute  # search multiple
+   msft / GPUs     # search multiple
 
 # Tickers resolve via SEC data.
 # " / " runs each term independently.
