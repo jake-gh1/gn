@@ -17,7 +17,6 @@ curl -fsSL https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.
 ```zsh
 irm https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.ps1 | iex
 ```
-
 Run `gn` to create or edit the runtime config. For details, see **[docs/config.md](docs/config.md)**.
 
 **Commands**
@@ -28,7 +27,6 @@ gn msft         # searches
 ```
 
 ## Docs
-
 - **[docs/config.md](docs/config.md)**
 - **[docs/workflow.md](docs/workflow.md)**
 
