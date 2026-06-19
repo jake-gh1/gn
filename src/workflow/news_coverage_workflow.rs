@@ -511,7 +511,7 @@ impl DefaultWorkflowEngine {
         &self,
         context: NewsAnalysisContext<'_>,
         all_results: Vec<SearchResult>,
-        build_prompt: impl Fn(&[(String, String)]) -> String,
+        build_prompt: impl Fn(&[String]) -> String,
         progress: &ProgressSink,
     ) -> Result<(CachedNews, TokenUsage, Vec<String>)> {
         let mut articles = build_news_articles(&all_results, &self.allowlist);
@@ -540,7 +540,7 @@ impl DefaultWorkflowEngine {
 
         let prompt_items = articles
             .iter()
-            .map(|article| (article.publisher.clone(), article.title.clone()))
+            .map(|article| article.title.clone())
             .collect::<Vec<_>>();
         let mut decisions = vec![None; prompt_items.len()];
         let mut missing_indices = Vec::new();
@@ -687,8 +687,8 @@ impl DefaultWorkflowEngine {
 
     async fn news_relevance_decisions(
         &self,
-        items: &[(String, String)],
-        build_prompt: impl Fn(&[(String, String)]) -> String,
+        items: &[String],
+        build_prompt: impl Fn(&[String]) -> String,
         error_label: &str,
         progress: &ProgressSink,
     ) -> Result<(Vec<bool>, TokenUsage)> {
@@ -696,7 +696,7 @@ impl DefaultWorkflowEngine {
             return Ok((Vec::new(), TokenUsage::default()));
         }
 
-        let chunks: Vec<&[(String, String)]> = items.chunks(NEWS_LLM_CHUNK_SIZE).collect();
+        let chunks: Vec<&[String]> = items.chunks(NEWS_LLM_CHUNK_SIZE).collect();
         let prompts = chunks
             .iter()
             .map(|chunk| build_prompt(chunk))
@@ -960,15 +960,10 @@ fn news_label_excluded_terms(values: &[&str]) -> HashSet<String> {
 
 fn build_news_editorial_label_prompt(context: &str, items: &[NewsEditorialLabelItem]) -> String {
     let mut body = format!(
-        "{context}\n\nWrite polished editorial tags for each news row in a dense news table.\n\nRules:\n- Return ONLY a JSON object: {{\"items\":[{{\"id\":1,\"label\":\"2-3 word tag\"}}]}}.\n- Return exactly one item for each title and preserve each title's numeric ID.\n- Use Title Case with no trailing punctuation.\n- Prefer the central business event, transaction, policy issue, product, market, executive action, or compensation topic.\n- Never use \"News\" as a label.\n- Avoid generic headline words unless they are paired with a specific topic.\n- Avoid vague abstractions that describe an outlook, strategy, sector, brief, analysis, takeaway, or technology trend instead of the concrete event.\n- If the context names an active company, do not include that company name or ticker unless needed to distinguish it from another named company.\n- Do not use publisher names unless the title itself is about that publisher.\n- Use only the title and publisher below; do not add outside facts.\n\nTitles:\n"
+        "{context}\n\nWrite polished editorial tags for each news row in a dense news table.\n\nRules:\n- Return ONLY a JSON object: {{\"items\":[{{\"id\":1,\"label\":\"2-3 word tag\"}}]}}.\n- Return exactly one item for each title and preserve each title's numeric ID.\n- Use Title Case with no trailing punctuation.\n- Prefer the central business event, transaction, policy issue, product, market, executive action, or compensation topic.\n- Never use \"News\" as a label.\n- Avoid generic headline words unless they are paired with a specific topic.\n- Avoid vague abstractions that describe an outlook, strategy, sector, brief, analysis, takeaway, or technology trend instead of the concrete event.\n- If the context names an active company, do not include that company name or ticker unless needed to distinguish it from another named company.\n- Do not use publisher names unless the title itself is about that publisher.\n- Use only the title below; do not add outside facts.\n\nTitles:\n"
     );
     for (idx, item) in items.iter().enumerate() {
-        body.push_str(&format!(
-            "{}. [{}]\nTitle: {}\n",
-            idx + 1,
-            item.publisher.trim(),
-            item.title.trim()
-        ));
+        body.push_str(&format!("{}.\nTitle: {}\n", idx + 1, item.title.trim()));
         body.push('\n');
     }
     body
@@ -991,10 +986,9 @@ fn build_news_editorial_label_repair_prompt(
         )
     };
     format!(
-        "{context}\n\nRepair one editorial tag for a dense news table.\n\nRules:\n- Return ONLY this JSON shape with no markdown fences: {{\"items\":[{{\"label\":\"2-3 word tag\"}}]}}.\n- Return exactly one item.\n- The label must be 2 or 3 words; never return a one-word label.\n- Use Title Case with no trailing punctuation.\n- Never use \"News\" as a label.\n- Do not repeat the active company name or ticker from the context.{disallowed_line}\n- If the invalid label repeats a disallowed term, remove that term and preserve the remaining concrete action or topic when it still satisfies the rules.\n- Avoid vague abstractions; use the concrete event, product, policy, deal, market, executive, or compensation topic when available.\n- Use only the title and publisher below; do not add outside facts.\n\nInvalid label: {}\nProblem: {}\n\nPublisher: {}\nTitle: {}\n",
+        "{context}\n\nRepair one editorial tag for a dense news table.\n\nRules:\n- Return ONLY this JSON shape with no markdown fences: {{\"items\":[{{\"label\":\"2-3 word tag\"}}]}}.\n- Return exactly one item.\n- The label must be 2 or 3 words; never return a one-word label.\n- Use Title Case with no trailing punctuation.\n- Never use \"News\" as a label.\n- Do not repeat the active company name or ticker from the context.{disallowed_line}\n- If the invalid label repeats a disallowed term, remove that term and preserve the remaining concrete action or topic when it still satisfies the rules.\n- Avoid vague abstractions; use the concrete event, product, policy, deal, market, executive, or compensation topic when available.\n- Use only the title below; do not add outside facts.\n\nInvalid label: {}\nProblem: {}\n\nTitle: {}\n",
         invalid_label.trim(),
         reason.prompt_text(),
-        item.publisher.trim(),
         item.title.trim()
     )
 }
@@ -1491,7 +1485,7 @@ mod workflow_tests {
                             .next()
                             .map(|ch| ch.is_ascii_digit())
                             .unwrap_or(false)
-                            && trimmed.contains(". [")
+                            && trimmed.contains(". ")
                     })
                     .enumerate()
                     .filter(|(_, line)| !line.contains("Jimmy Kimmel"))

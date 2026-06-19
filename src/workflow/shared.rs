@@ -17,14 +17,14 @@ pub(crate) fn news_coverage_title(label: &str) -> String {
 
 pub(crate) fn build_news_relevance_prompt(
     identity: &CompanyIdentity,
-    items: &[(String, String)],
+    items: &[String],
 ) -> String {
     let mut body = build_news_relevance_prompt_header(identity);
     append_titles_block(&mut body, items);
     body
 }
 
-pub(crate) fn build_query_news_relevance_prompt(query: &str, items: &[(String, String)]) -> String {
+pub(crate) fn build_query_news_relevance_prompt(query: &str, items: &[String]) -> String {
     let terms = split_news_query_terms(query);
     let mut body = if terms.len() > 1 {
         let query_context = format!(
@@ -36,11 +36,11 @@ pub(crate) fn build_query_news_relevance_prompt(query: &str, items: &[(String, S
                 .join("\n")
         );
         format!(
-            "{query_context}\n\nDecide whether each news article title is relevant enough to show for this news search.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search terms, title, and publisher only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in at least one search term.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match a search term.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n"
+            "{query_context}\n\nDecide whether each news article title is relevant enough to show for this news search.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search terms and title only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in at least one search term.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match a search term.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n"
         )
     } else {
         format!(
-            "Search query: {}\n\nDecide whether each news article title is relevant enough to show for this news query.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search query, title, and publisher only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in the search query.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match the query.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
+            "Search query: {}\n\nDecide whether each news article title is relevant enough to show for this news query.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search query and title only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in the search query.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match the query.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
             query.trim()
         )
     };
@@ -48,20 +48,15 @@ pub(crate) fn build_query_news_relevance_prompt(query: &str, items: &[(String, S
     body
 }
 
-fn append_titles_block(body: &mut String, items: &[(String, String)]) {
-    for (idx, (publisher, title)) in items.iter().enumerate() {
-        body.push_str(&format!(
-            "{}. [{}] {}\n",
-            idx + 1,
-            publisher.trim(),
-            title.trim()
-        ));
+fn append_titles_block(body: &mut String, items: &[String]) {
+    for (idx, title) in items.iter().enumerate() {
+        body.push_str(&format!("{}. {}\n", idx + 1, title.trim()));
     }
 }
 
 fn build_news_relevance_prompt_header(identity: &CompanyIdentity) -> String {
     format!(
-        "Company context: {name} ({ticker})\n\nDecide whether each news article title is relevant enough to show in a company-specific news list.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the title and publisher only; do not infer from outside knowledge unless the title names a recognizable brand, subsidiary, product, executive, regulator, customer, supplier, partner, or competitor relationship for {name}.\n- Include a title only when it is clearly about {name}, its ticker {ticker}, or a concrete business relationship affecting {name}.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles.\n- Exclude titles where the company is only one ticker in a generic mover/watchlist item.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
+        "Company context: {name} ({ticker})\n\nDecide whether each news article title is relevant enough to show in a company-specific news list.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the title only; do not infer from outside knowledge unless the title names a recognizable brand, subsidiary, product, executive, regulator, customer, supplier, partner, or competitor relationship for {name}.\n- Include a title only when it is clearly about {name}, its ticker {ticker}, or a concrete business relationship affecting {name}.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles.\n- Exclude titles where the company is only one ticker in a generic mover/watchlist item.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
         name = identity.company_name,
         ticker = identity.ticker
     )
