@@ -22,13 +22,11 @@ Run `gn` to create or edit the runtime config. For details, see **[docs/config.m
 
 **Example Commands**
 ```zsh
-gn msft            # search company
-   maia 2000       # search term
+gn msft            # search
    msft / compute  # search multiple
    --model         # choose model
    --models        # list models
    --config        # edit configuration
-   --history       # open history
 ```
 
 ## Docs
