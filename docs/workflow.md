@@ -7,8 +7,7 @@
 Articles come from **[Google News](https://news.google.com/)** and fall back to **[Bing News](https://news.bing.com/)**.
 
 ```zsh
-gn msft            # search company
-   maia 2000       # search term
+gn msft            # search
    msft / compute  # search multiple
 
 # Tickers resolve via SEC data.
