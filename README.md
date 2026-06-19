@@ -22,9 +22,11 @@ Run `gn` to create or edit the runtime config. For details, see **[docs/config.m
 
 ### Examples
 ```zsh
-gn msft      # search
-   --model   # choose model
-   --config  # edit configuration
+gn msft         # search
+   msft / GPUs  # search multiple
+   --model      # choose model
+   --models     # list models
+   --config     # edit configuration
 ```
 
 ## Docs
