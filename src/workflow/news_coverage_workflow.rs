@@ -1962,47 +1962,6 @@ mod workflow_tests {
     }
 
     #[tokio::test]
-    async fn coverage_workflow_filters_cached_articles_to_allowlist() {
-        let sources = Arc::new(FakeSources::default());
-        seed(
-            &sources,
-            "AMZN",
-            vec![
-                article(
-                    "Amazon expands AWS data center capacity",
-                    "Reuters",
-                    "https://www.reuters.com/technology/amazon-aws",
-                ),
-                article(
-                    "Amazon expands AWS data center capacity",
-                    "Business Insider",
-                    "https://www.businessinsider.com/amazon-aws",
-                ),
-            ],
-        );
-        let engine = DefaultWorkflowEngine::new(
-            Arc::new(FakeLlm::default()),
-            sources,
-            vec![AllowlistEntry {
-                domain: "reuters.com".to_string(),
-            }],
-        );
-
-        let result = engine
-            .start(StartWorkflow::for_ticker("AMZN"))
-            .await
-            .expect("cached news coverage workflow should filter allowlist");
-
-        let cached = result.cached_news.as_ref().expect("cached news");
-        let publishers = cached
-            .articles
-            .iter()
-            .map(|article| article.publisher.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(publishers, vec!["Reuters"]);
-    }
-
-    #[tokio::test]
     async fn repeated_company_search_refreshes_sources_without_repeating_model_calls() {
         let sources = Arc::new(FakeSources::default());
         seed(

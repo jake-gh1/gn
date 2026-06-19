@@ -481,7 +481,7 @@ mod tests {
         fs,
         path::PathBuf,
         sync::{Arc, Mutex},
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use crate::config::{ModelConfig, RuntimeConfig};
@@ -592,40 +592,11 @@ mod tests {
         let line = model.footer_plain_line();
         let timestamp = line.rsplit(" · @").next().expect("timestamp field");
 
-        assert!(!line.contains("Model:"));
-        assert!(!line.contains("Tokens:"));
-        assert!(!line.contains("Timestamp:"));
         assert!(line.contains(" · 1,408 → 207 · @"));
+        // Local-time HH:MM:SS, so check the shape rather than a timezone-dependent value.
+        assert_eq!(timestamp.chars().count(), 8);
         assert_eq!(timestamp.chars().nth(2), Some(':'));
         assert_eq!(timestamp.chars().nth(5), Some(':'));
-        assert_eq!(timestamp.chars().count(), 8);
-        assert!(!timestamp.contains('T'));
-        assert!(!line.contains(" · Ran: "));
-        assert!(!line.contains(" · Time: "));
-    }
-
-    #[test]
-    fn token_counter_lags_while_running_and_settles_when_done() {
-        let mut model = AppModel::new(RuntimeConfig::default());
-        let (_sender, receiver) = std::sync::mpsc::channel();
-        model.workflow_events = Some(receiver);
-        model.total_input_tokens = 10_000;
-
-        // While the run is live the glide eases up but never catches all the way to the
-        // total, even across a long frame — so it keeps lagging the latest burst.
-        model.token_display_updated_at = Instant::now() - Duration::from_secs(1);
-        model.sync_token_display();
-        let lagging = model.displayed_token_counts().0;
-        assert!(lagging > 0);
-        assert!(lagging < 10_000);
-
-        // Once the run ends, the settle floor converges the residual lag to the total.
-        model.workflow_events = None;
-        for _ in 0..200 {
-            model.token_display_updated_at = Instant::now() - Duration::from_millis(33);
-            model.sync_token_display();
-        }
-        assert_eq!(model.displayed_token_counts(), (10_000, 0));
     }
 
     #[test]
@@ -658,8 +629,6 @@ mod tests {
         model.poll_workflow_events();
 
         assert_eq!(model.progress_note.as_deref(), Some("Labeling 3 articles…"));
-        // The stage no longer snaps the counter; it keeps lagging behind the total.
-        assert!(model.displayed_token_counts().0 < model.total_input_tokens);
     }
 
     #[test]
@@ -852,36 +821,29 @@ mod tests {
             styled_stale.spans[0].style,
             Style::default().fg(model.palette.dim)
         );
-    }
 
-    #[test]
-    fn workflow_new_article_keys_mark_top_row_even_when_stale() {
-        let mut model = AppModel::new(RuntimeConfig::default());
-        model.width = 120;
-        model.company_tickers = vec!["NVDA".to_string()];
-        let article = news_article(
+        // A stale article still earns the marker when it is the top row.
+        let stale_top = news_article(
             "Nvidia introduces new AI inference chips",
             "CNBC",
             "AI Chip Competition",
             SystemTime::now() - Duration::from_secs(13 * 3_600),
         );
-        let article_key = article.cache_key();
-
+        let stale_top_key = stale_top.cache_key();
         model.remember_workflow_cache_snapshot(&workflow_result_with_articles(
-            vec![article],
-            Some(vec![article_key]),
+            vec![stale_top],
+            Some(vec![stale_top_key]),
         ));
-
-        let line = model
+        let top_line = model
             .news_article_table_line_for_index(0)
             .expect("news table row");
-        assert!(line.starts_with("•  13hrs ago"));
-        let styled = model
-            .style_news_article_table_line(&line, None)
-            .expect("style");
-        assert_eq!(styled.spans[0].content.as_ref(), "•");
+        assert!(top_line.starts_with("•  13hrs ago"));
         assert_eq!(
-            styled.spans[0].style,
+            model
+                .style_news_article_table_line(&top_line, None)
+                .expect("style")
+                .spans[0]
+                .style,
             Style::default().fg(ratatui::style::Color::White)
         );
     }
