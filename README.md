@@ -8,7 +8,7 @@
 ---
 
 ## Get Started
-### Install
+### Install & Run
 **macOS**
 ```zsh
 curl -fsSL https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.sh | sh
@@ -20,10 +20,11 @@ irm https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.ps1 | i
 
 Run `gn` to create or edit the runtime config. For details, see **[docs/config.md](docs/config.md)**.
 
-### Examples
+**Commands**
 ```zsh
-gn msft     # search
-   --model  # choose model
+gn msft         # search
+   msft / GPUs  
+   --model      # change model
 ```
 
 ## Docs
