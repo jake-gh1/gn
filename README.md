@@ -20,7 +20,7 @@ irm https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.ps1 | i
 
 Run `gn` to create or edit the runtime config. For details, see **[docs/config.md](docs/config.md)**.
 
-**Example Commands**
+### Examples
 ```zsh
 gn msft            # search
    msft / compute  # search multiple
