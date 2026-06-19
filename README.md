@@ -20,9 +20,7 @@ irm https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.ps1 | i
 
 Run `gn` to create or edit the runtime config. For details, see **[docs/config.md](docs/config.md)**.
 
-<details>
-<summary><strong>Example Commands</strong></summary>
-  
+**Example Commands**
 ```zsh
 gn msft            # search company
    maia 2000       # search term
@@ -32,7 +30,6 @@ gn msft            # search company
    --config        # edit configuration
    --history       # open history
 ```
-</details>
 
 ## Docs
 
