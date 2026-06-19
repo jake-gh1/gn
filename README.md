@@ -6,7 +6,6 @@
 <br />For details, read <strong><a href="./docs/workflow.md">docs/workflow.md</a></strong>.
 
 ---
-## Get Started
 ### Install & Run
 **macOS**
 ```zsh
@@ -23,8 +22,5 @@ Run `gn` to edit the runtime config. For details, see **[docs/config.md](docs/co
 gn msft     # search
    --model  # change model
 ```
-## Docs
-- **[docs/config.md](docs/config.md)**
-- **[docs/workflow.md](docs/workflow.md)**
-
+### License
 This repository is licensed under the [Apache 2.0 License](LICENSE).
