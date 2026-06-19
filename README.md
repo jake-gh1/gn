@@ -16,7 +16,7 @@ curl -fsSL https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.
 ```zsh
 irm https://github.com/jake-gh1/gn/releases/latest/download/gn-installer.ps1 | iex
 ```
-Run `gn` to create or edit the runtime config. For details, see **[docs/config.md](docs/config.md)**.
+Run `gn` to edit the runtime config. For details, see **[docs/config.md](docs/config.md)**.
 
 **Commands**
 ```zsh
