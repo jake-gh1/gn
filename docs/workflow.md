@@ -7,8 +7,8 @@
 Articles come from **[Google News](https://news.google.com/)** and fall back to **[Bing News](https://news.bing.com/)**.
 
 ```zsh
-gn msft            # search
-   msft / GPUs     # search multiple
+gn msft            # pull 90-day news snapshot
+   msft / GPUs     # pull 90-day news snapshot
 
 # Tickers resolve via SEC data.
 # " / " runs each term independently.
