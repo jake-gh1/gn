@@ -2,7 +2,7 @@
   <img src="images/news-workflow1.png" alt="gn news coverage workflow" width="100%" />
 </p>
 <strong>gn</strong> pulls 90-day news snapshots.
-<br />Use <strong><a href="./docs/config.md">local or cloud LLMs</a></strong>.
+<br />Use <strong><a href="./docs/config.md">local or cloud LLMs</a></strong> to refine the snapshot.
 <br />For details, read <strong><a href="./docs/workflow.md">docs/workflow.md</a></strong>.
 
 ---
