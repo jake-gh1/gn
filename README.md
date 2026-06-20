@@ -19,7 +19,7 @@ Run `gn` to edit the runtime config. For details, see **[docs/config.md](docs/co
 
 **Commands**
 ```zsh
-gn msft     # search
+gn msft     # pull 90-day news snapshot
    --model  # change model
 ```
 ### License
