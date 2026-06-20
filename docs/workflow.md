@@ -1,6 +1,6 @@
 ## News Coverage
 
-**[gn](https://github.com/jake-gh1/gn)** gets, filters, and labels news.
+**[gn](https://github.com/jake-gh1/gn)** pulls 90-day news snapshots.
 
 ![gn news coverage example](../images/news-workflow1.png)
 
