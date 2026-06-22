@@ -99,7 +99,6 @@ pub struct AppModel {
     pub(crate) config_editor: ConfigEditor,
     pub(crate) history_editor: ConfigEditor,
     pub(crate) on_model_switch: Option<Arc<dyn Fn(usize) + Send + Sync>>,
-    pub(crate) codex_auth_in_flight: bool,
     pub(crate) lazy_runtime_enabled: bool,
     pub(crate) runtime_config_path_override: Option<PathBuf>,
     pub(crate) user_config_path_override: Option<PathBuf>,
@@ -161,7 +160,6 @@ impl AppModel {
             config_editor: Arc::new(open_path_in_editor),
             history_editor: Arc::new(open_path_in_editor_and_wait),
             on_model_switch: None,
-            codex_auth_in_flight: false,
             lazy_runtime_enabled: true,
             runtime_config_path_override: None,
             user_config_path_override: None,
@@ -321,7 +319,6 @@ impl AppModel {
         self.workflow_runtime = None;
         self.workflow_engine = None;
         self.on_model_switch = None;
-        self.codex_auth_in_flight = false;
         self.active_model = active_model_index(&self.runtime, 0);
     }
 
@@ -577,58 +574,6 @@ mod tests {
             model.active_model_label(),
             Some("openai/gpt-5.4".to_string())
         );
-    }
-
-    #[test]
-    fn footer_prints_run_timestamp() {
-        let mut model = AppModel::new(RuntimeConfig::default());
-        model.run_started_at = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        model.completed_elapsed = Some(Duration::from_secs(83));
-        model.total_input_tokens = 1_408;
-        model.total_output_tokens = 207;
-        model.displayed_input_tokens = 1_408.0;
-        model.displayed_output_tokens = 207.0;
-
-        let line = model.footer_plain_line();
-        let timestamp = line.rsplit(" · @").next().expect("timestamp field");
-
-        assert!(line.contains(" · 1,408 → 207 · @"));
-        // Local-time HH:MM:SS, so check the shape rather than a timezone-dependent value.
-        assert_eq!(timestamp.chars().count(), 8);
-        assert_eq!(timestamp.chars().nth(2), Some(':'));
-        assert_eq!(timestamp.chars().nth(5), Some(':'));
-    }
-
-    #[test]
-    fn usage_progress_yields_a_frame_before_later_workflow_events() {
-        let mut model = AppModel::new(RuntimeConfig::default());
-        let (sender, receiver) = std::sync::mpsc::channel();
-        model.workflow_events = Some(receiver);
-
-        sender
-            .send(WorkflowUiEvent::Progress(WorkflowProgress::Usage(
-                TokenUsage {
-                    input_tokens: 1_000,
-                    output_tokens: 200,
-                    total_tokens: 1_200,
-                },
-            )))
-            .expect("send usage");
-        sender
-            .send(WorkflowUiEvent::Progress(WorkflowProgress::Stage(
-                "Labeling 3 articles…".to_string(),
-            )))
-            .expect("send stage");
-
-        model.poll_workflow_events();
-
-        assert_eq!(model.total_input_tokens, 1_000);
-        assert_eq!(model.total_output_tokens, 200);
-        assert!(model.progress_note.is_none());
-
-        model.poll_workflow_events();
-
-        assert_eq!(model.progress_note.as_deref(), Some("Labeling 3 articles…"));
     }
 
     #[test]

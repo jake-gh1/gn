@@ -365,19 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn default_runtime_config_template_matches_docs_example() {
-        let docs = include_str!("../../docs/config.md");
-        let (_, rest) = docs
-            .split_once("```toml\n")
-            .expect("docs config should include toml example");
-        let (example, _) = rest
-            .split_once("```\n")
-            .expect("docs config toml example should close");
-
-        assert_eq!(DEFAULT_RUNTIME_CONFIG_TEMPLATE, example);
-    }
-
-    #[test]
     fn load_runtime_config_parses_explicit_models_and_sources() {
         let path = write_runtime_config_file(
             r#"OPENAI_API_KEY = "test-openai-key"

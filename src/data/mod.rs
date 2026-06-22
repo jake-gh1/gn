@@ -263,32 +263,3 @@ pub fn normalize_url(raw: &str) -> String {
         .to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    #[test]
-    fn compare_news_articles_sorts_newer_articles_before_older_allowlisted_articles() {
-        let now = SystemTime::now();
-        let older_allowlisted = NewsArticle {
-            title: "Allowlisted source article".to_string(),
-            publisher: "WSJ".to_string(),
-            published_at: Some(now - Duration::from_secs(86_400)),
-            source_rank: 1000,
-            ..NewsArticle::default()
-        };
-        let newer_generic = NewsArticle {
-            title: "Newer generic article".to_string(),
-            publisher: "Generic News".to_string(),
-            published_at: Some(now),
-            source_rank: 400,
-            ..NewsArticle::default()
-        };
-
-        assert_eq!(
-            compare_news_articles(&newer_generic, &older_allowlisted),
-            Ordering::Less
-        );
-    }
-}

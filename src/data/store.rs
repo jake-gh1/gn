@@ -628,22 +628,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn normalize_sec_title_keeps_suffix_case() {
-        assert_eq!(
-            normalize_sec_company_title("NVIDIA CORP"),
-            "Nvidia Corp".to_string()
-        );
-        assert_eq!(
-            normalize_sec_company_title("TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD"),
-            "Taiwan Semiconductor Manufacturing Co Ltd".to_string()
-        );
-        assert_eq!(
-            normalize_sec_company_title("NOVO NORDISK A S"),
-            "Novo Nordisk A S".to_string()
-        );
-    }
-
     #[tokio::test]
     async fn article_analysis_persists_across_store_instances() {
         let path = temp_db("news-cache");

@@ -22,6 +22,10 @@ pub(crate) struct PendingSearch {
 }
 
 impl AppModel {
+    pub(crate) fn set_status_message(&mut self, content: &str) {
+        self.status_message = Some(content.to_string());
+    }
+
     pub fn launch_search_after_preparing(&mut self, value: &str) -> anyhow::Result<()> {
         let query = value.trim();
         if query.is_empty() {
@@ -93,10 +97,6 @@ impl AppModel {
             self.set_status_message(
                 "No runtime config is configured. Run `gn` to create or edit gn's runtime config.",
             );
-            return Ok(());
-        }
-
-        if !self.ensure_provider_auth_for_workflow() {
             return Ok(());
         }
 
@@ -303,9 +303,6 @@ impl AppModel {
         ) {
             Ok(runtime) => {
                 self.apply_runtime_config(runtime);
-                if !self.runtime.models.is_empty() {
-                    self.check_provider_auth("startup");
-                }
             }
             Err(err) => {
                 self.set_status_message(&format!(

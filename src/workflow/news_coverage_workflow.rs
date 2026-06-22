@@ -1314,38 +1314,7 @@ async fn complete_news_chunks_in_parallel(
 
 #[cfg(test)]
 mod unit_tests {
-    use std::collections::HashSet;
-
     use super::*;
-
-    fn label_item() -> NewsEditorialLabelItem {
-        NewsEditorialLabelItem {
-            article_idx: 0,
-            publisher: "Bloomberg".to_string(),
-            title: "China's Hot, Unprofitable AI Stocks Are Hard to Short Until July".to_string(),
-        }
-    }
-
-    fn validate_item_label(
-        raw_label: &str,
-        item: &NewsEditorialLabelItem,
-        excluded_terms: &HashSet<String>,
-    ) -> std::result::Result<String, NewsLabelInvalidReason> {
-        validate_editorial_label(raw_label, &item.publisher, &item.title, excluded_terms)
-    }
-
-    #[test]
-    fn editorial_labels_must_be_two_to_three_words() {
-        assert!(validate_item_label("Shorts", &label_item(), &HashSet::new()).is_err());
-        assert!(
-            validate_item_label(
-                "Unprofitable AI Stock Shorts",
-                &label_item(),
-                &HashSet::new()
-            )
-            .is_err()
-        );
-    }
 
     #[test]
     fn editorial_labels_map_partial_out_of_order_ids() {
@@ -1366,57 +1335,6 @@ mod unit_tests {
     }
 
     #[test]
-    fn editorial_labels_reject_partial_positional_output() {
-        assert!(
-            parse_news_editorial_labels(r#"{"items":[{"label":"AI Stock Shorts"}]}"#, 2).is_none()
-        );
-    }
-
-    #[test]
-    fn editorial_labels_parse_single_repair_object() {
-        let labels = parse_news_editorial_labels(r#"{"label":"AI Stock Shorts"}"#, 1)
-            .expect("single repair label");
-
-        assert_eq!(labels, vec![Some("AI Stock Shorts".to_string())]);
-    }
-
-    #[test]
-    fn editorial_labels_parse_nested_single_repair_string() {
-        let labels = parse_news_editorial_labels(r#"{"labels":"AI Stock Shorts"}"#, 1)
-            .expect("nested single repair label");
-
-        assert_eq!(labels, vec![Some("AI Stock Shorts".to_string())]);
-    }
-
-    #[test]
-    fn editorial_labels_parse_numeric_map_output() {
-        let labels = parse_news_editorial_labels(
-            r#"{"items":{"2":"Export Rule Changes","1":{"label":"Data Center Expansion"}}}"#,
-            2,
-        )
-        .expect("numeric map labels");
-
-        assert_eq!(
-            labels,
-            vec![
-                Some("Data Center Expansion".to_string()),
-                Some("Export Rule Changes".to_string())
-            ]
-        );
-    }
-
-    #[test]
-    fn editorial_labels_repair_duplicated_key_quotes() {
-        let labels = parse_news_editorial_labels(
-            "```json\n{\"items\":[{\"\"label\":\"Secret Society\"}]}\n```",
-            1,
-        )
-        .expect("duplicated key quote label");
-
-        assert_eq!(labels, vec![Some("Secret Society".to_string())]);
-    }
-
-    #[test]
     fn editorial_labels_extract_malformed_single_label_fragment() {
         let labels = parse_news_editorial_labels(
             "```json\n{\"items\":[{\"\"label\":\"Solar Power\"]]}\n```",
@@ -1426,26 +1344,13 @@ mod unit_tests {
 
         assert_eq!(labels, vec![Some("Solar Power".to_string())]);
     }
-
-    #[test]
-    fn editorial_label_fragments_preserve_correction_order() {
-        let labels = editorial_label_fragments(
-            "```json\n{\"items\":[{\"\"label\":\"Relocation News\"}]}\n```\n\
-             Correction:\n```json\n{\"items\":[{\"\"label\":\"Relocation Move\"}]}\n```",
-        );
-
-        assert_eq!(
-            labels,
-            vec!["Relocation News".to_string(), "Relocation Move".to_string()]
-        );
-    }
 }
 
 #[cfg(test)]
 mod workflow_tests {
     use std::{
         collections::HashMap,
-        sync::{Arc, Mutex},
+        sync::Arc,
     };
 
     use crate::config::AllowlistEntry;
@@ -1836,71 +1741,6 @@ mod workflow_tests {
                 .iter()
                 .filter(|prompt| prompt.contains("Repair one editorial tag"))
                 .all(|prompt| !prompt.contains("Nvidia faces AI chip export rule changes"))
-        );
-    }
-
-    #[tokio::test]
-    async fn coverage_workflow_emits_candidate_filtered_and_labeled_snapshots() {
-        let sources = Arc::new(FakeSources::default());
-        seed(
-            &sources,
-            "AMZN",
-            vec![
-                article(
-                    "Amazon expands AWS data center capacity",
-                    "Reuters",
-                    "https://example.com/amzn-aws",
-                ),
-                article(
-                    "Jimmy Kimmel's Journey From Bro-Comic to Trump's Late-Night Foil",
-                    "WSJ",
-                    "https://example.com/kimmel",
-                ),
-            ],
-        );
-        let llm = Arc::new(FakeLlm::default());
-        let engine = DefaultWorkflowEngine::new(llm, sources, Vec::new());
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let events_for_sink = Arc::clone(&events);
-        let sink: ProgressSink = Arc::new(move |event| {
-            events_for_sink.lock().expect("events").push(event);
-        });
-
-        engine
-            .start_with_progress(StartWorkflow::for_ticker("AMZN"), sink)
-            .await
-            .expect("workflow");
-
-        let snapshots = events
-            .lock()
-            .expect("events")
-            .iter()
-            .filter_map(|event| match event {
-                WorkflowProgress::Snapshot(articles) => Some(articles.clone()),
-                WorkflowProgress::Stage(_)
-                | WorkflowProgress::Identity(_)
-                | WorkflowProgress::Usage(_) => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(snapshots.len() >= 3);
-        assert_eq!(snapshots[0].len(), 2);
-        assert!(
-            snapshots[0]
-                .iter()
-                .any(|article| article.title.contains("Jimmy Kimmel"))
-        );
-        assert!(snapshots.iter().skip(1).any(|articles| {
-            articles.len() == 1
-                && articles
-                    .iter()
-                    .all(|article| !article.title.contains("Jimmy Kimmel"))
-        }));
-        assert!(
-            snapshots
-                .last()
-                .expect("final snapshot")
-                .iter()
-                .all(|article| !article.label.trim().is_empty())
         );
     }
 

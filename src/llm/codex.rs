@@ -15,22 +15,11 @@ const CODEX_BACKEND_URL: &str = "https://chatgpt.com/backend-api/codex/responses
 const CODEX_HEADER_BETA_VALUE: &str = "responses=experimental";
 const CODEX_HEADER_ORIGINATOR: &str = "codex_cli_rs";
 
-const CODEX_AUTH_MODE_CHATGPT: &str = "chatgpt";
-const CODEX_AUTH_MODE_API_KEY: &str = "api_key";
-
 const CODEX_INSTRUCTIONS: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.";
 
 /// Cached auth state persisted in Codex's `auth.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct CodexSession {
-    #[serde(
-        rename = "OPENAI_API_KEY",
-        default,
-        deserialize_with = "deserialize_nullable_string"
-    )]
-    openai_api_key: String,
-    #[serde(default)]
-    auth_mode: String,
     #[serde(default)]
     tokens: CodexSessionToken,
 }
@@ -42,12 +31,6 @@ struct CodexSessionToken {
     access_token: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     account_id: String,
-}
-
-/// Lightweight login status used by the UI to decide whether to prompt for sign-in.
-#[derive(Debug, Clone)]
-pub struct CodexLoginState {
-    pub logged_in: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,14 +76,6 @@ struct CodexContent {
     text: String,
 }
 
-fn deserialize_nullable_string<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt: Option<String> = Option::deserialize(deserializer)?;
-    Ok(opt.unwrap_or_default())
-}
-
 fn default_codex_auth_path() -> Result<PathBuf> {
     if let Ok(custom) = std::env::var("CODEX_HOME") {
         let custom = custom.trim();
@@ -122,7 +97,6 @@ fn dirs_home() -> Option<PathBuf> {
 struct AuthenticatedCodexSession {
     session: CodexSession,
     credential: String,
-    auth_mode: String,
 }
 
 fn load_authenticated_codex_session() -> Result<AuthenticatedCodexSession> {
@@ -136,55 +110,15 @@ fn load_authenticated_codex_session() -> Result<AuthenticatedCodexSession> {
     })?;
 
     let mut session: CodexSession = serde_json::from_str(&body).context("decode auth cache")?;
-    if session.auth_mode.is_empty() && !session.openai_api_key.trim().is_empty() {
-        session.auth_mode = CODEX_AUTH_MODE_API_KEY.to_string();
-    }
-    if session.auth_mode.is_empty() {
-        session.auth_mode = CODEX_AUTH_MODE_CHATGPT.to_string();
-    }
     if session.tokens.account_id.is_empty() {
         session.tokens.account_id = extract_codex_account_id(&session.tokens.access_token);
     }
 
-    let (credential, auth_mode) = session_credential(&session);
+    let credential = session.tokens.access_token.trim().to_string();
     if credential.is_empty() {
         anyhow::bail!("codex is not logged in");
     }
-    Ok(AuthenticatedCodexSession {
-        session,
-        credential,
-        auth_mode,
-    })
-}
-
-pub fn codex_login_status() -> Result<CodexLoginState> {
-    match load_authenticated_codex_session() {
-        Ok(_) => Ok(CodexLoginState { logged_in: true }),
-        Err(err) => {
-            let msg = err.to_string();
-            if msg.contains("not logged in") {
-                Ok(CodexLoginState { logged_in: false })
-            } else {
-                Err(err)
-            }
-        }
-    }
-}
-
-fn session_credential(session: &CodexSession) -> (String, String) {
-    if !session.tokens.access_token.trim().is_empty() {
-        return (
-            session.tokens.access_token.trim().to_string(),
-            CODEX_AUTH_MODE_CHATGPT.to_string(),
-        );
-    }
-    if !session.openai_api_key.trim().is_empty() {
-        return (
-            session.openai_api_key.trim().to_string(),
-            CODEX_AUTH_MODE_API_KEY.to_string(),
-        );
-    }
-    (String::new(), String::new())
+    Ok(AuthenticatedCodexSession { session, credential })
 }
 
 fn extract_codex_account_id(token: &str) -> String {
@@ -280,9 +214,7 @@ impl CodexClient {
         if !auth.session.tokens.account_id.trim().is_empty() {
             req = req.header("chatgpt-account-id", &auth.session.tokens.account_id);
         }
-        if auth.auth_mode == CODEX_AUTH_MODE_CHATGPT {
-            req = req.header("OpenAI-Beta", CODEX_HEADER_BETA_VALUE);
-        }
+        req = req.header("OpenAI-Beta", CODEX_HEADER_BETA_VALUE);
 
         let resp = req
             .body(body_bytes.to_vec())

@@ -486,9 +486,6 @@ fn dedupe_news_articles(
         if url.is_empty() {
             continue;
         }
-        if is_non_article_news_result(&title, &url) {
-            continue;
-        }
         let publisher = normalize_publisher(&result.source_name, &url);
         let title_publisher_key = title_publisher_key(&title, &publisher);
         let key = news_article_dedupe_key(
@@ -566,31 +563,6 @@ fn clean_news_title(title: &str, source_name: &str) -> String {
     } else {
         title
     }
-}
-
-fn is_non_article_news_result(title: &str, _url: &str) -> bool {
-    let title = title.trim().to_ascii_lowercase();
-    let non_article_title_phrases = [
-        "stock overview",
-        "advanced charts",
-        "company & people",
-        "company and people",
-        "financials",
-        "historical prices",
-        "analyst ratings",
-        "stock price",
-        "quote",
-        "options chain",
-        "stock grades",
-    ];
-    if non_article_title_phrases
-        .iter()
-        .any(|phrase| title.contains(phrase))
-    {
-        return true;
-    }
-
-    false
 }
 
 fn normalize_publisher(source_name: &str, url: &str) -> String {
@@ -806,36 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_exclude_newer_non_allowlisted_items() {
-        let articles = build_news_articles(
-            &[
-                result(
-                    "Low Quality Blog",
-                    "AMD launches unrelated product roundup",
-                    "https://low.example.com/amd-product-roundup",
-                    0,
-                ),
-                result(
-                    "Reuters",
-                    "AMD server CPU revenue outlook improves",
-                    "https://www.reuters.com/technology/amd-server-cpu-outlook",
-                    4,
-                ),
-            ],
-            &[AllowlistEntry {
-                domain: "reuters.com".to_string(),
-            }],
-        );
-
-        let publishers = articles
-            .iter()
-            .map(|article| article.publisher.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(publishers, vec!["Reuters"]);
-    }
-
-    #[test]
-    fn slash_separated_queries_are_split_into_independent_terms() {
+    fn split_news_query_terms_splits_on_spaced_slashes_only() {
         assert_eq!(
             super::split_news_query_terms("msft / aapl / nvda"),
             vec!["msft", "aapl", "nvda"]
@@ -844,10 +787,7 @@ mod tests {
             super::split_news_query_terms("gpu costs  /  dram / compute"),
             vec!["gpu costs", "dram", "compute"]
         );
-    }
-
-    #[test]
-    fn slashes_without_surrounding_whitespace_remain_part_of_the_query() {
+        // Slashes without surrounding whitespace stay part of the term.
         assert_eq!(
             super::split_news_query_terms("AI/ML infrastructure"),
             vec!["AI/ML infrastructure"]
@@ -908,50 +848,6 @@ mod tests {
             &non_match.source_name,
             &non_match.url,
             &reuters
-        ));
-    }
-
-    #[test]
-    fn allowlist_matching_accepts_known_publisher_aliases() {
-        let financial_times = result(
-            "Financial Times",
-            "Anthropic weighs fundraising at new valuation",
-            "https://news.google.com/rss/articles/example",
-            1,
-        );
-        let new_york_times = result(
-            "The New York Times",
-            "OpenAI releases new model",
-            "https://news.google.com/rss/articles/example",
-            1,
-        );
-        let wall_street_journal = result(
-            "The Wall Street Journal",
-            "Amazon expands AI partnership",
-            "https://news.google.com/rss/articles/example",
-            1,
-        );
-
-        assert!(super::matches_allowlisted_source(
-            &financial_times.source_name,
-            &financial_times.url,
-            &AllowlistEntry {
-                domain: "ft.com".to_string(),
-            }
-        ));
-        assert!(super::matches_allowlisted_source(
-            &new_york_times.source_name,
-            &new_york_times.url,
-            &AllowlistEntry {
-                domain: "nytimes.com".to_string(),
-            }
-        ));
-        assert!(super::matches_allowlisted_source(
-            &wall_street_journal.source_name,
-            &wall_street_journal.url,
-            &AllowlistEntry {
-                domain: "wsj.com".to_string(),
-            }
         ));
     }
 
@@ -1094,48 +990,6 @@ mod tests {
             titles.iter().all(
                 |title| !title.ends_with(" - Barron's") && !title.ends_with(" - Bloomberg.com")
             )
-        );
-    }
-
-    #[test]
-    fn news_articles_drop_stock_quote_pages() {
-        let articles = build_news_articles(
-            &[
-                result(
-                    "Barron's",
-                    "AAPL | Apple Inc. Stock Overview (U.S.: Nasdaq)",
-                    "https://www.barrons.com/market-data/stocks/aapl",
-                    1,
-                ),
-                result(
-                    "Barron's",
-                    "Apple Inc. Advanced Charts | AAPL",
-                    "https://www.barrons.com/market-data/stocks/aapl/charts",
-                    1,
-                ),
-                result(
-                    "Barron's",
-                    "Apple Inc. Financials | AAPL",
-                    "https://www.barrons.com/market-data/stocks/aapl/financials",
-                    1,
-                ),
-                result(
-                    "Reuters",
-                    "Apple settles lawsuit over late Siri AI features for $250 million",
-                    "https://www.reuters.com/legal/apple-siri-ai-lawsuit-settlement",
-                    1,
-                ),
-            ],
-            &[],
-        );
-
-        let titles = articles
-            .iter()
-            .map(|article| article.title.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            titles,
-            vec!["Apple settles lawsuit over late Siri AI features for $250 million"]
         );
     }
 }

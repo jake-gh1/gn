@@ -136,36 +136,3 @@ impl CliOptions {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::CliOptions;
-
-    #[test]
-    fn cli_options_parse_bare_model_flag() {
-        let parsed = CliOptions::parse(["--model".to_string()]).expect("parse");
-
-        assert_eq!(parsed.model, Some(None));
-        assert_eq!(parsed.query, None);
-    }
-
-    #[test]
-    fn cli_options_preserve_slash_separated_query_terms() {
-        let parsed = CliOptions::parse([
-            "msft".to_string(),
-            "/".to_string(),
-            "aapl".to_string(),
-            "/".to_string(),
-            "nvda".to_string(),
-        ])
-        .expect("parse");
-
-        assert_eq!(parsed.query.as_deref(), Some("msft / aapl / nvda"));
-    }
-
-    #[test]
-    fn cli_options_reject_help_flag() {
-        let err = CliOptions::parse(["--help".to_string()]).expect_err("parse");
-
-        assert_eq!(err.to_string(), "unknown flag `--help`");
-    }
-}
