@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use crate::data::NewsArticle;
 use crate::ui::*;
@@ -9,6 +9,8 @@ const MAX_NEWS_PUBLISHER_WIDTH: usize = 18;
 const MAX_NEWS_LABEL_WIDTH: usize = 25;
 const MIN_NEWS_LABEL_WIDTH: usize = "Label".len();
 const MIN_NEWS_TITLE_WIDTH: usize = 28;
+// How long the head, then the tail, of an overflowing title stays on screen.
+const TITLE_TOGGLE_PERIOD: Duration = Duration::from_millis(3000);
 
 struct NewsArticleTableState {
     layout: NewsArticleTableLayout,
@@ -85,13 +87,16 @@ impl AppModel {
         publisher: &str,
         label: &str,
         title: &str,
+        title_scroll_elapsed: Option<Duration>,
     ) -> String {
         let (_, date_width, publisher_width, label_width, title_width) = layout;
         let row_marker = if has_marker { "•  " } else { "   " };
         let date = truncate_with_ellipsis(&date, date_width);
         let publisher = truncate_with_ellipsis(publisher, publisher_width);
         let label = truncate_with_ellipsis(label, label_width);
-        let title = truncate_with_ellipsis(title, title_width);
+        let title = title_scroll_elapsed
+            .map(|elapsed| scrolling_title_window(title, title_width, elapsed))
+            .unwrap_or_else(|| truncate_with_ellipsis(title, title_width));
         format!(
             "{row_marker}{date:date_width$}  {publisher:publisher_width$}  {label:label_width$}  {title:title_width$}"
         )
@@ -117,6 +122,7 @@ impl AppModel {
             &article.publisher,
             article.label.trim(),
             &article.title,
+            self.news_article_title_scroll_elapsed(row_idx),
         ))
     }
 
@@ -181,6 +187,43 @@ impl AppModel {
             .get(&ticker.to_ascii_uppercase())
             .is_some_and(|keys| !keys.is_empty())
     }
+
+    fn news_article_title_scroll_elapsed(&self, row_idx: usize) -> Option<Duration> {
+        (self.workflow_events.is_none()
+            && self.live_articles.is_none()
+            && self.story_menu_focused
+            && self.story_title_scroll_row == Some(row_idx))
+        .then(|| {
+            self.story_title_scroll_frame_at
+                .checked_duration_since(self.story_title_scroll_started_at)
+                .unwrap_or_default()
+        })
+    }
+}
+
+// A terminal can't scroll sub-character, so a crawling marquee always reads as
+// choppy. Instead, dwell on the head of an overflowing title, then cleanly swap
+// to the tail and back — two static frames, no per-letter stepping.
+fn scrolling_title_window(title: &str, width: usize, elapsed: Duration) -> String {
+    let chars = title.chars().collect::<Vec<_>>();
+    if chars.len() <= width {
+        return title.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+
+    let period_ms = TITLE_TOGGLE_PERIOD.as_millis().max(1);
+    let showing_tail = (elapsed.as_millis() / period_ms) % 2 == 1;
+    if !showing_tail {
+        return truncate_with_ellipsis(title, width);
+    }
+
+    let tail: String = chars[chars.len() - (width - 1)..].iter().collect();
+    format!("…{tail}")
 }
 
 fn news_article_rows_for(articles: &[NewsArticle]) -> Vec<usize> {
@@ -282,4 +325,29 @@ fn news_article_row_dedupe_key(publisher: &str, title: &str) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn scrolling_title_window_toggles_head_and_tail_for_overflow() {
+        let title = "abcdefghijkl";
+
+        // Short title fits untouched.
+        assert_eq!(scrolling_title_window("abc", 6, Duration::ZERO), "abc");
+        // Head while in the first period, tail in the second, head again after.
+        assert_eq!(scrolling_title_window(title, 6, Duration::ZERO), "abcde…");
+        assert_eq!(
+            scrolling_title_window(title, 6, TITLE_TOGGLE_PERIOD),
+            "…hijkl"
+        );
+        assert_eq!(
+            scrolling_title_window(title, 6, TITLE_TOGGLE_PERIOD * 2),
+            "abcde…"
+        );
+    }
 }

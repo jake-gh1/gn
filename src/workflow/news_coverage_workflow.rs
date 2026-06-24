@@ -845,7 +845,10 @@ impl DefaultWorkflowEngine {
             .and_then(|labels| labels.into_iter().next().flatten())
             .into_iter()
             .collect();
-        for fragment in editorial_label_fragments(&completion.text).into_iter().rev() {
+        for fragment in editorial_label_fragments(&completion.text)
+            .into_iter()
+            .rev()
+        {
             if !candidates.contains(&fragment) {
                 candidates.push(fragment);
             }
@@ -864,7 +867,8 @@ impl DefaultWorkflowEngine {
 
         let mut final_reason = None;
         for candidate in &candidates {
-            match validate_editorial_label(candidate, &item.publisher, &item.title, excluded_terms) {
+            match validate_editorial_label(candidate, &item.publisher, &item.title, excluded_terms)
+            {
                 Ok(label) => return Ok(label),
                 Err(reason) => {
                     final_reason.get_or_insert(reason);
@@ -1348,10 +1352,7 @@ mod unit_tests {
 
 #[cfg(test)]
 mod workflow_tests {
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use crate::config::AllowlistEntry;
     use crate::data::{

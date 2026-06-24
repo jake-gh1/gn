@@ -388,6 +388,7 @@ impl AppModel {
 
     pub(crate) fn sync_ui_state(&mut self) {
         self.poll_workflow_events();
+        self.sync_story_title_scroll();
         self.sync_token_display();
         self.sync_runtime_config_if_changed();
     }

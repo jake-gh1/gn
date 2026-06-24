@@ -95,6 +95,9 @@ pub struct AppModel {
     pub(crate) company_names: Vec<String>,
     pub(crate) story_menu_highlight: usize,
     pub(crate) story_menu_focused: bool,
+    pub(crate) story_title_scroll_row: Option<usize>,
+    pub(crate) story_title_scroll_started_at: Instant,
+    pub(crate) story_title_scroll_frame_at: Instant,
     pub(crate) browser_opener: BrowserOpener,
     pub(crate) config_editor: ConfigEditor,
     pub(crate) history_editor: ConfigEditor,
@@ -125,6 +128,7 @@ impl AppModel {
         // if background resources are not needed yet.
         let palette = UiPalette::standard();
         let active_model = active_model_index(&runtime, 0);
+        let now = Instant::now();
 
         Self {
             runtime,
@@ -144,10 +148,10 @@ impl AppModel {
             total_output_tokens: 0,
             displayed_input_tokens: 0.0,
             displayed_output_tokens: 0.0,
-            token_display_updated_at: Instant::now(),
+            token_display_updated_at: now,
             run_reported_input_tokens: 0,
             run_reported_output_tokens: 0,
-            started_at: Instant::now(),
+            started_at: now,
             run_started_at: SystemTime::now(),
             completed_elapsed: None,
             cached_news: HashMap::new(),
@@ -156,6 +160,9 @@ impl AppModel {
             company_names: Vec::new(),
             story_menu_highlight: 0,
             story_menu_focused: false,
+            story_title_scroll_row: None,
+            story_title_scroll_started_at: now,
+            story_title_scroll_frame_at: now,
             browser_opener: Arc::new(open_url_in_browser),
             config_editor: Arc::new(open_path_in_editor),
             history_editor: Arc::new(open_path_in_editor_and_wait),
@@ -352,6 +359,18 @@ impl AppModel {
             elapsed,
             settle_rate,
         );
+    }
+
+    pub(crate) fn sync_story_title_scroll(&mut self) {
+        let now = Instant::now();
+        self.story_title_scroll_frame_at = now;
+        let row_count = self.news_article_row_count();
+        let scroll_row = (self.story_menu_focused && row_count > 0)
+            .then(|| self.story_menu_highlight.min(row_count - 1));
+        if self.story_title_scroll_row != scroll_row {
+            self.story_title_scroll_row = scroll_row;
+            self.story_title_scroll_started_at = now;
+        }
     }
 
     pub(crate) fn displayed_token_counts(&self) -> (usize, usize) {

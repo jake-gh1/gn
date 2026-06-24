@@ -135,4 +135,3 @@ impl CliOptions {
         Ok(options)
     }
 }
-

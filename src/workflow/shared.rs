@@ -15,10 +15,7 @@ pub(crate) fn news_coverage_title(label: &str) -> String {
     format!("{}{}", label.trim(), NEWS_COVERAGE_TITLE_SUFFIX)
 }
 
-pub(crate) fn build_news_relevance_prompt(
-    identity: &CompanyIdentity,
-    items: &[String],
-) -> String {
+pub(crate) fn build_news_relevance_prompt(identity: &CompanyIdentity, items: &[String]) -> String {
     let mut body = build_news_relevance_prompt_header(identity);
     append_titles_block(&mut body, items);
     body

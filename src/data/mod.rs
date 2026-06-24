@@ -262,4 +262,3 @@ pub fn normalize_url(raw: &str) -> String {
         .trim_end_matches('/')
         .to_string()
 }
-

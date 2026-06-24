@@ -118,7 +118,10 @@ fn load_authenticated_codex_session() -> Result<AuthenticatedCodexSession> {
     if credential.is_empty() {
         anyhow::bail!("codex is not logged in");
     }
-    Ok(AuthenticatedCodexSession { session, credential })
+    Ok(AuthenticatedCodexSession {
+        session,
+        credential,
+    })
 }
 
 fn extract_codex_account_id(token: &str) -> String {
