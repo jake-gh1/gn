@@ -15,13 +15,13 @@ pub(crate) fn news_coverage_title(label: &str) -> String {
     format!("{}{}", label.trim(), NEWS_COVERAGE_TITLE_SUFFIX)
 }
 
-pub(crate) fn build_news_relevance_prompt(identity: &CompanyIdentity, items: &[String]) -> String {
-    let mut body = build_news_relevance_prompt_header(identity);
+pub(crate) fn build_news_analysis_prompt(identity: &CompanyIdentity, items: &[String]) -> String {
+    let mut body = build_news_analysis_prompt_header(identity);
     append_titles_block(&mut body, items);
     body
 }
 
-pub(crate) fn build_query_news_relevance_prompt(query: &str, items: &[String]) -> String {
+pub(crate) fn build_query_news_analysis_prompt(query: &str, items: &[String]) -> String {
     let terms = split_news_query_terms(query);
     let mut body = if terms.len() > 1 {
         let query_context = format!(
@@ -33,11 +33,11 @@ pub(crate) fn build_query_news_relevance_prompt(query: &str, items: &[String]) -
                 .join("\n")
         );
         format!(
-            "{query_context}\n\nDecide whether each news article title is relevant enough to show for this news search.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search terms and title only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in at least one search term.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match a search term.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n"
+            "{query_context}\n\nFor each numbered news title, decide whether it belongs in this search and write a short label when it does.\n\nReturn ONLY JSON: {{\"items\":[{{\"id\":1,\"include\":true,\"label\":\"2-3 Word Tag\"}},{{\"id\":2,\"include\":false,\"label\":null}}]}}. Return exactly one item per title and preserve IDs.\n\nRelevance rules:\n- Use the search terms and title only; include a title when it clearly matches the intent, entity, topic, or phrase in at least one search term.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, broad macro, generic update, landing/directory, video, stock quote, analyst rating, financial-statement, and non-English titles unless they directly match a search term.\n\nLabel rules:\n- For included titles, write a concrete 2-3 word Title Case tag with no trailing punctuation.\n- Never use \"News\"; avoid vague outlook, strategy, sector, brief, analysis, takeaway, or trend labels.\n- Use only the title and do not add outside facts. For excluded titles, use null.\n\nTitles:\n"
         )
     } else {
         format!(
-            "Search query: {}\n\nDecide whether each news article title is relevant enough to show for this news query.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the search query and title only; do not infer from outside knowledge.\n- Include a title when it clearly matches the intent, entity, topic, or phrase in the search query.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles unless they directly match the query.\n- Exclude titles that only match generic words such as news, latest, update, today, market, or stocks.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
+            "Search query: {}\n\nFor each numbered news title, decide whether it belongs in this search and write a short label when it does.\n\nReturn ONLY JSON: {{\"items\":[{{\"id\":1,\"include\":true,\"label\":\"2-3 Word Tag\"}},{{\"id\":2,\"include\":false,\"label\":null}}]}}. Return exactly one item per title and preserve IDs.\n\nRelevance rules:\n- Use the query and title only; include a title when it clearly matches the query's intent, entity, topic, or phrase.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, broad macro, generic update, landing/directory, video, stock quote, analyst rating, financial-statement, and non-English titles unless they directly match the query.\n\nLabel rules:\n- For included titles, write a concrete 2-3 word Title Case tag with no trailing punctuation.\n- Never use \"News\"; avoid vague outlook, strategy, sector, brief, analysis, takeaway, or trend labels.\n- Use only the title and do not add outside facts. For excluded titles, use null.\n\nTitles:\n",
             query.trim()
         )
     };
@@ -51,26 +51,12 @@ fn append_titles_block(body: &mut String, items: &[String]) {
     }
 }
 
-fn build_news_relevance_prompt_header(identity: &CompanyIdentity) -> String {
+fn build_news_analysis_prompt_header(identity: &CompanyIdentity) -> String {
     format!(
-        "Company context: {name} ({ticker})\n\nDecide whether each news article title is relevant enough to show in a company-specific news list.\n\nRules:\n- Return ONLY a JSON object listing the numbers of the titles to include: {{\"include\":[title numbers]}}. Use [] when none qualify.\n- Use the title only; do not infer from outside knowledge unless the title names a recognizable brand, subsidiary, product, executive, regulator, customer, supplier, partner, or competitor relationship for {name}.\n- Include a title only when it is clearly about {name}, its ticker {ticker}, or a concrete business relationship affecting {name}.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, or broad macro titles.\n- Exclude titles where the company is only one ticker in a generic mover/watchlist item.\n- Exclude company profile, tag, topic, landing, or directory pages, including generic titles that are only a company, product, or ticker name with no concrete news event.\n- Exclude titles that appear to be video content or link to a video, including titles beginning with \"Watch\" or explicitly labeled \"Video\".\n- Exclude stock quote, analyst estimates or ratings, financial statements, income statement, balance sheet, and cash flow pages.\n- Exclude titles written in a language other than English.\n\nTitles:\n",
+        "Company context: {name} ({ticker})\n\nFor each numbered news title, decide whether it belongs in this company-specific list and write a short label when it does.\n\nReturn ONLY JSON: {{\"items\":[{{\"id\":1,\"include\":true,\"label\":\"2-3 Word Tag\"}},{{\"id\":2,\"include\":false,\"label\":null}}]}}. Return exactly one item per title and preserve IDs.\n\nRelevance rules:\n- Use the title only, except for recognizable relationships involving a brand, subsidiary, product, executive, regulator, customer, supplier, partner, or competitor of {name}.\n- Include only titles clearly about {name}, {ticker}, or a concrete business relationship affecting {name}.\n- Exclude unrelated politics, entertainment, sports, culture, market-color, listicle, broad macro, generic mover/watchlist, landing/directory, video, stock quote, analyst rating, financial-statement, and non-English titles.\n\nLabel rules:\n- For included titles, write a concrete 2-3 word Title Case tag with no trailing punctuation.\n- Do not use {name}, {ticker}, \"News\", publisher names, or vague outlook, strategy, sector, brief, analysis, takeaway, or trend labels.\n- Use only the title and do not add outside facts. For excluded titles, use null.\n\nTitles:\n",
         name = identity.company_name,
         ticker = identity.ticker
     )
-}
-
-pub(crate) fn parse_news_relevance_decisions(text: &str, expected_len: usize) -> Option<Vec<bool>> {
-    let value = parse_first_json_value(text)?;
-    let indices = json_items_from_value(&value, &["include"], serde_json::Value::as_u64)?;
-    let mut decisions = vec![false; expected_len];
-    for index in indices {
-        // Titles are numbered from 1 in the prompt; out-of-range numbers are dropped rather than
-        // failing the whole chunk.
-        if (1..=expected_len as u64).contains(&index) {
-            decisions[index as usize - 1] = true;
-        }
-    }
-    Some(decisions)
 }
 
 pub(crate) fn parse_first_json_value(text: &str) -> Option<serde_json::Value> {
@@ -88,32 +74,6 @@ pub(crate) fn parse_first_json_value(text: &str) -> Option<serde_json::Value> {
             }
             None
         })
-}
-
-pub(crate) fn json_items_from_value<T>(
-    value: &serde_json::Value,
-    container_keys: &[&str],
-    parse_leaf: fn(&serde_json::Value) -> Option<T>,
-) -> Option<Vec<T>> {
-    match value {
-        serde_json::Value::Array(items) => {
-            let mut out = Vec::with_capacity(items.len());
-            for item in items {
-                out.push(parse_leaf(item)?);
-            }
-            Some(out)
-        }
-        serde_json::Value::Object(map) => {
-            if let Some(item) = parse_leaf(value) {
-                return Some(vec![item]);
-            }
-            container_keys
-                .iter()
-                .filter_map(|key| map.get(*key))
-                .find_map(|item| json_items_from_value(item, container_keys, parse_leaf))
-        }
-        _ => None,
-    }
 }
 
 pub(crate) fn label_validation_tokens(text: &str) -> Vec<String> {
@@ -270,31 +230,4 @@ pub(crate) fn news_source_urls(articles: &[NewsArticle]) -> Vec<String> {
         }
     }
     source_urls
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn news_relevance_decisions_parse_included_title_numbers() {
-        assert_eq!(
-            parse_news_relevance_decisions(r#"{"include":[1,3]}"#, 3),
-            Some(vec![true, false, true])
-        );
-        assert_eq!(
-            parse_news_relevance_decisions(r#"{"include":[]}"#, 2),
-            Some(vec![false, false])
-        );
-        assert_eq!(
-            parse_news_relevance_decisions(r#"{"include":[2,7,0]}"#, 2),
-            Some(vec![false, true])
-        );
-        assert_eq!(
-            parse_news_relevance_decisions(r#"[1,2]"#, 2),
-            Some(vec![true, true])
-        );
-        assert!(parse_news_relevance_decisions(r#"{"include":[true,false]}"#, 2).is_none());
-        assert!(parse_news_relevance_decisions(r#"{"items":[{"include":true}]}"#, 1).is_none());
-    }
 }

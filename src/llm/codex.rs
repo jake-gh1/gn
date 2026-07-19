@@ -1,6 +1,6 @@
 //! Codex HTTP client backed by the local Codex auth cache.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, process::Command};
 
 use crate::config::debug_log;
 use anyhow::{Context, Result, anyhow};
@@ -31,6 +31,12 @@ struct CodexSessionToken {
     access_token: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexModelsCache {
+    #[serde(default)]
+    client_version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,15 +82,19 @@ struct CodexContent {
     text: String,
 }
 
-fn default_codex_auth_path() -> Result<PathBuf> {
+fn default_codex_home() -> Result<PathBuf> {
     if let Ok(custom) = std::env::var("CODEX_HOME") {
         let custom = custom.trim();
         if !custom.is_empty() {
-            return Ok(PathBuf::from(custom).join("auth.json"));
+            return Ok(PathBuf::from(custom));
         }
     }
     let home = dirs_home().context("resolve home dir")?;
-    Ok(home.join(".codex").join("auth.json"))
+    Ok(home.join(".codex"))
+}
+
+fn default_codex_auth_path() -> Result<PathBuf> {
+    Ok(default_codex_home()?.join("auth.json"))
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -157,10 +167,60 @@ fn decode_codex_token_claims(token: &str) -> Result<serde_json::Map<String, serd
     Ok(claims)
 }
 
+fn parse_codex_client_version(value: &str) -> Option<String> {
+    let version = value.trim();
+    if version.is_empty()
+        || !version.starts_with(|ch: char| ch.is_ascii_digit())
+        || !version
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '+'))
+    {
+        return None;
+    }
+    Some(version.to_string())
+}
+
+fn parse_codex_version_output(output: &[u8]) -> Option<String> {
+    std::str::from_utf8(output).ok()?.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("codex-cli ")
+            .and_then(parse_codex_client_version)
+    })
+}
+
+fn installed_codex_client_version() -> Result<String> {
+    let cache_path = default_codex_home()?.join("models_cache.json");
+    if let Ok(body) = std::fs::read_to_string(&cache_path)
+        && let Ok(cache) = serde_json::from_str::<CodexModelsCache>(&body)
+        && let Some(version) = parse_codex_client_version(&cache.client_version)
+    {
+        return Ok(version);
+    }
+
+    if let Ok(output) = Command::new("codex").arg("--version").output()
+        && output.status.success()
+        && let Some(version) = parse_codex_version_output(&output.stdout)
+    {
+        return Ok(version);
+    }
+
+    anyhow::bail!(
+        "could not resolve the installed Codex client version; run `codex --version` and start Codex once"
+    )
+}
+
+fn codex_user_agent() -> Result<String> {
+    Ok(format!(
+        "{CODEX_HEADER_ORIGINATOR}/{}",
+        installed_codex_client_version()?
+    ))
+}
+
 /// LLM client that talks to Codex's backend API using the saved auth cache.
 pub struct CodexClient {
     provider: String,
     model_id: String,
+    user_agent: Result<String, String>,
 }
 
 impl CodexClient {
@@ -168,6 +228,7 @@ impl CodexClient {
         Self {
             provider: provider.to_string(),
             model_id: model_id.trim().to_string(),
+            user_agent: codex_user_agent().map_err(|err| err.to_string()),
         }
     }
 
@@ -207,21 +268,9 @@ impl CodexClient {
         );
 
         let client = reqwest::Client::new();
-        let mut req = client
-            .post(CODEX_BACKEND_URL)
-            .header("Authorization", format!("Bearer {}", auth.credential))
-            .header("originator", CODEX_HEADER_ORIGINATOR)
-            .header("Accept", "text/event-stream")
-            .header("Content-Type", "application/json");
-
-        if !auth.session.tokens.account_id.trim().is_empty() {
-            req = req.header("chatgpt-account-id", &auth.session.tokens.account_id);
-        }
-        req = req.header("OpenAI-Beta", CODEX_HEADER_BETA_VALUE);
-
-        let resp = req
-            .body(body_bytes.to_vec())
-            .send()
+        let request = self.build_http_request(&client, auth, body_bytes)?;
+        let resp = client
+            .execute(request)
             .await
             .context("send Codex request")?;
 
@@ -256,6 +305,34 @@ impl CodexClient {
         );
 
         Ok(result)
+    }
+
+    fn build_http_request(
+        &self,
+        client: &reqwest::Client,
+        auth: &AuthenticatedCodexSession,
+        body_bytes: &[u8],
+    ) -> Result<reqwest::Request> {
+        let user_agent = self
+            .user_agent
+            .as_deref()
+            .map_err(|err| anyhow!(err.to_string()))?;
+        let mut req = client
+            .post(CODEX_BACKEND_URL)
+            .bearer_auth(&auth.credential)
+            .header("originator", CODEX_HEADER_ORIGINATOR)
+            .header(reqwest::header::USER_AGENT, user_agent)
+            .header("Accept", "text/event-stream")
+            .header("Content-Type", "application/json");
+
+        if !auth.session.tokens.account_id.trim().is_empty() {
+            req = req.header("chatgpt-account-id", &auth.session.tokens.account_id);
+        }
+        req = req.header("OpenAI-Beta", CODEX_HEADER_BETA_VALUE);
+
+        req.body(body_bytes.to_vec())
+            .build()
+            .context("build Codex request")
     }
 }
 
@@ -358,4 +435,75 @@ fn parse_codex_sse(body: &str) -> Result<CompletionResponse> {
             total_tokens,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::{AUTHORIZATION, USER_AGENT};
+
+    #[test]
+    fn parses_codex_cli_version_output() {
+        assert_eq!(
+            parse_codex_version_output(b"codex-cli 0.144.0\n"),
+            Some("0.144.0".to_string())
+        );
+        assert_eq!(parse_codex_version_output(b"codex 0.144.0\n"), None);
+        assert_eq!(parse_codex_version_output(b"codex-cli bad/version\n"), None);
+    }
+
+    #[test]
+    fn codex_request_includes_versioned_user_agent() {
+        let client = CodexClient {
+            provider: "codex".to_string(),
+            model_id: "gpt-test".to_string(),
+            user_agent: Ok("codex_cli_rs/0.144.0".to_string()),
+        };
+        let auth = AuthenticatedCodexSession {
+            session: CodexSession {
+                tokens: CodexSessionToken {
+                    access_token: "test-token".to_string(),
+                    account_id: "test-account".to_string(),
+                },
+            },
+            credential: "test-token".to_string(),
+        };
+
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("test HTTP client should build");
+        let request = client
+            .build_http_request(&http, &auth, b"{}")
+            .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(USER_AGENT)
+                .and_then(|v| v.to_str().ok()),
+            Some("codex_cli_rs/0.144.0")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("originator")
+                .and_then(|v| v.to_str().ok()),
+            Some(CODEX_HEADER_ORIGINATOR)
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("chatgpt-account-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("test-account")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer test-token")
+        );
+    }
 }

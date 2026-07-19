@@ -81,11 +81,36 @@ struct NewsEditorialLabelItem {
     title: String,
 }
 
+#[derive(Debug, Clone)]
+struct NewsEditorialRepairItem {
+    article_idx: usize,
+    publisher: String,
+    title: String,
+    invalid_label: String,
+    reason: NewsLabelInvalidReason,
+}
+
 struct NewsAnalysisContext<'a> {
     context_key: &'a str,
     label_context: &'a str,
     excluded_label_terms: &'a HashSet<String>,
     error_label: &'a str,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct NewsAnalysisDecision {
+    include: bool,
+    label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawNewsAnalysisDecision {
+    #[serde(default, alias = "index", alias = "number", alias = "article")]
+    id: Option<serde_json::Value>,
+    #[serde(default, alias = "relevant", alias = "keep")]
+    include: Option<bool>,
+    #[serde(default, alias = "tag", alias = "title", alias = "name")]
+    label: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -425,7 +450,7 @@ impl DefaultWorkflowEngine {
             .analyze_current_results(
                 analysis_context,
                 all_results,
-                |chunk| build_news_relevance_prompt(identity, chunk),
+                |chunk| build_news_analysis_prompt(identity, chunk),
                 progress,
             )
             .await?;
@@ -490,7 +515,7 @@ impl DefaultWorkflowEngine {
             .analyze_current_results(
                 analysis_context,
                 all_results,
-                |chunk| build_query_news_relevance_prompt(query, chunk),
+                |chunk| build_query_news_analysis_prompt(query, chunk),
                 progress,
             )
             .await?;
@@ -543,6 +568,7 @@ impl DefaultWorkflowEngine {
             .map(|article| article.title.clone())
             .collect::<Vec<_>>();
         let mut decisions = vec![None; prompt_items.len()];
+        let mut fresh_labels = vec![None; prompt_items.len()];
         let mut missing_indices = Vec::new();
         let mut missing_items = Vec::new();
         for (idx, (article, prompt_item)) in original_articles
@@ -565,10 +591,10 @@ impl DefaultWorkflowEngine {
         if !missing_items.is_empty() {
             emit(
                 progress,
-                WorkflowProgress::Stage(format!("Filtering {} headlines…", missing_items.len())),
+                WorkflowProgress::Stage(format!("Analyzing {} headlines…", missing_items.len())),
             );
             let (fresh_decisions, usage) = self
-                .news_relevance_decisions(
+                .news_analysis_decisions(
                     &missing_items,
                     build_prompt,
                     context.error_label,
@@ -576,22 +602,24 @@ impl DefaultWorkflowEngine {
                 )
                 .await?;
             add_token_usage(&mut workflow_usage, &usage);
-            for (idx, relevant) in missing_indices.into_iter().zip(fresh_decisions) {
-                decisions[idx] = Some(relevant);
+            for (idx, decision) in missing_indices.into_iter().zip(fresh_decisions) {
+                decisions[idx] = Some(decision.include);
+                fresh_labels[idx] = decision.label;
             }
         }
         let decisions = decisions
             .into_iter()
             .map(|decision| decision.unwrap_or(true))
             .collect::<Vec<_>>();
-        let mut decision_iter = decisions.iter().copied();
-        articles.retain(|_| decision_iter.next().unwrap_or(false));
-
-        for article in &mut articles {
-            let Some(cached) = analyses.get(&article.cache_key()) else {
+        for (idx, article) in articles.iter_mut().enumerate() {
+            if !decisions[idx] {
                 continue;
-            };
-            let Some(label) = cached.label.as_deref() else {
+            }
+            let cached_label = analyses
+                .get(&article.cache_key())
+                .and_then(|cached| cached.label.as_deref());
+            let label = cached_label.or(fresh_labels[idx].as_deref());
+            let Some(label) = label else {
                 continue;
             };
             if let Ok(label) = validate_editorial_label(
@@ -601,8 +629,14 @@ impl DefaultWorkflowEngine {
                 context.excluded_label_terms,
             ) {
                 article.label = label;
+            } else if cached_label.is_none() {
+                // Preserve a fresh invalid label so the batched repair prompt can explain what
+                // needs fixing. Invalid cached labels retain the previous empty-label behavior.
+                article.label = label.to_string();
             }
         }
+        let mut decision_iter = decisions.iter().copied();
+        articles.retain(|_| decision_iter.next().unwrap_or(false));
         emit(progress, WorkflowProgress::Snapshot(articles.clone()));
 
         let mut cached = CachedNews {
@@ -685,13 +719,13 @@ impl DefaultWorkflowEngine {
         Ok((cached, workflow_usage, new_article_keys))
     }
 
-    async fn news_relevance_decisions(
+    async fn news_analysis_decisions(
         &self,
         items: &[String],
         build_prompt: impl Fn(&[String]) -> String,
         error_label: &str,
         progress: &ProgressSink,
-    ) -> Result<(Vec<bool>, TokenUsage)> {
+    ) -> Result<(Vec<NewsAnalysisDecision>, TokenUsage)> {
         if items.is_empty() {
             return Ok((Vec::new(), TokenUsage::default()));
         }
@@ -708,7 +742,7 @@ impl DefaultWorkflowEngine {
         for (chunk, response) in chunks.iter().zip(responses.into_iter()) {
             let completion = response?;
             add_token_usage(&mut total_usage, &completion.usage);
-            match parse_news_relevance_decisions(&completion.text, chunk.len()) {
+            match parse_news_analysis_decisions(&completion.text, chunk.len()) {
                 Some(parsed) => decisions.extend(parsed),
                 None => {
                     debug_log(
@@ -720,7 +754,13 @@ impl DefaultWorkflowEngine {
                             completion.text.len()
                         ),
                     );
-                    decisions.extend(std::iter::repeat_n(true, chunk.len()));
+                    decisions.extend(std::iter::repeat_n(
+                        NewsAnalysisDecision {
+                            include: true,
+                            label: None,
+                        },
+                        chunk.len(),
+                    ));
                 }
             }
         }
@@ -770,6 +810,7 @@ impl DefaultWorkflowEngine {
 
         let mut total_usage = TokenUsage::default();
         let mut accepted_labels = Vec::with_capacity(items.len());
+        let mut repairs = Vec::new();
         for (chunk, response) in chunks.iter().zip(responses.into_iter()) {
             let completion = response?;
             add_token_usage(&mut total_usage, &completion.usage);
@@ -786,19 +827,35 @@ impl DefaultWorkflowEngine {
             }
             let labels = labels.unwrap_or_else(|| vec![None; chunk.len()]);
             for (item, raw_label) in chunk.iter().zip(labels.into_iter()) {
-                let label = self
-                    .validated_or_repaired_editorial_label(
-                        context,
-                        item,
-                        raw_label.as_deref().unwrap_or_default(),
-                        excluded_terms,
-                        &mut total_usage,
-                        progress,
-                    )
-                    .await?;
-                accepted_labels.push((item.article_idx, label));
+                let raw_label = raw_label.unwrap_or_default();
+                match validate_editorial_label(
+                    &raw_label,
+                    &item.publisher,
+                    &item.title,
+                    excluded_terms,
+                ) {
+                    Ok(label) => accepted_labels.push((item.article_idx, label)),
+                    Err(reason) => repairs.push(NewsEditorialRepairItem {
+                        article_idx: item.article_idx,
+                        publisher: item.publisher.clone(),
+                        title: item.title.clone(),
+                        invalid_label: raw_label,
+                        reason,
+                    }),
+                }
             }
         }
+
+        accepted_labels.extend(
+            self.repair_editorial_labels(
+                context,
+                &repairs,
+                excluded_terms,
+                &mut total_usage,
+                progress,
+            )
+            .await?,
+        );
 
         debug_assert_eq!(accepted_labels.len(), items.len());
         for (article_idx, label) in accepted_labels {
@@ -807,85 +864,47 @@ impl DefaultWorkflowEngine {
         Ok(total_usage)
     }
 
-    async fn validated_or_repaired_editorial_label(
+    async fn repair_editorial_labels(
         &self,
         context: &str,
-        item: &NewsEditorialLabelItem,
-        raw_label: &str,
+        items: &[NewsEditorialRepairItem],
         excluded_terms: &HashSet<String>,
         total_usage: &mut TokenUsage,
         progress: &ProgressSink,
-    ) -> Result<String> {
-        let current_reason =
-            match validate_editorial_label(raw_label, &item.publisher, &item.title, excluded_terms)
-            {
-                Ok(label) => return Ok(label),
-                Err(reason) => reason,
-            };
+    ) -> Result<Vec<(usize, String)>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let prompt = build_news_editorial_label_repair_prompt(
-            context,
-            item,
-            raw_label,
-            current_reason,
-            excluded_terms,
-        );
-        let completion = self
-            .llm
-            .complete(CompletionRequest {
-                prompt,
-                json_mode: true,
-            })
-            .await?;
-        add_token_usage(total_usage, &completion.usage);
-        emit_usage(progress, &completion.usage);
-        // Prefer the structurally parsed label, then fall back to any raw
-        // label fragments (latest correction first) the model emitted.
-        let mut candidates: Vec<String> = parse_news_editorial_labels(&completion.text, 1)
-            .and_then(|labels| labels.into_iter().next().flatten())
-            .into_iter()
+        let chunks = items.chunks(NEWS_LLM_CHUNK_SIZE).collect::<Vec<_>>();
+        let prompts = chunks
+            .iter()
+            .map(|chunk| build_news_editorial_label_repair_prompt(context, chunk, excluded_terms))
             .collect();
-        for fragment in editorial_label_fragments(&completion.text)
-            .into_iter()
-            .rev()
-        {
-            if !candidates.contains(&fragment) {
-                candidates.push(fragment);
+        let responses = complete_news_chunks_in_parallel(&self.llm, prompts, true, progress).await;
+        let mut repaired = Vec::with_capacity(items.len());
+        for (chunk, response) in chunks.iter().zip(responses) {
+            let completion = response?;
+            add_token_usage(total_usage, &completion.usage);
+            let labels = parse_news_editorial_labels(&completion.text, chunk.len())
+                .unwrap_or_else(|| vec![None; chunk.len()]);
+            for (item, label) in chunk.iter().zip(labels) {
+                let label = label
+                    .as_deref()
+                    .and_then(|label| {
+                        validate_editorial_label(
+                            label,
+                            &item.publisher,
+                            &item.title,
+                            excluded_terms,
+                        )
+                        .ok()
+                    })
+                    .unwrap_or_else(|| NEWS_LABEL_PLACEHOLDER.to_string());
+                repaired.push((item.article_idx, label));
             }
         }
-        if candidates.is_empty() {
-            debug_log(
-                "coverage",
-                format!(
-                    "news label editorial repair unparsable; using placeholder title={:?} output_chars={}",
-                    item.title,
-                    completion.text.len()
-                ),
-            );
-            return Ok(NEWS_LABEL_PLACEHOLDER.to_string());
-        }
-
-        let mut final_reason = None;
-        for candidate in &candidates {
-            match validate_editorial_label(candidate, &item.publisher, &item.title, excluded_terms)
-            {
-                Ok(label) => return Ok(label),
-                Err(reason) => {
-                    final_reason.get_or_insert(reason);
-                }
-            }
-        }
-
-        debug_log(
-            "coverage",
-            format!(
-                "news label editorial request returned invalid label; using placeholder title={:?} label={:?} reason={}",
-                item.title,
-                raw_label,
-                final_reason.map_or("", NewsLabelInvalidReason::prompt_text)
-            ),
-        );
-        Ok(NEWS_LABEL_PLACEHOLDER.to_string())
+        Ok(repaired)
     }
 }
 
@@ -975,9 +994,7 @@ fn build_news_editorial_label_prompt(context: &str, items: &[NewsEditorialLabelI
 
 fn build_news_editorial_label_repair_prompt(
     context: &str,
-    item: &NewsEditorialLabelItem,
-    invalid_label: &str,
-    reason: NewsLabelInvalidReason,
+    items: &[NewsEditorialRepairItem],
     excluded_terms: &HashSet<String>,
 ) -> String {
     let disallowed_terms = sorted_label_terms(excluded_terms);
@@ -989,12 +1006,19 @@ fn build_news_editorial_label_repair_prompt(
             disallowed_terms.join(", ")
         )
     };
-    format!(
-        "{context}\n\nRepair one editorial tag for a dense news table.\n\nRules:\n- Return ONLY this JSON shape with no markdown fences: {{\"items\":[{{\"label\":\"2-3 word tag\"}}]}}.\n- Return exactly one item.\n- The label must be 2 or 3 words; never return a one-word label.\n- Use Title Case with no trailing punctuation.\n- Never use \"News\" as a label.\n- Do not repeat the active company name or ticker from the context.{disallowed_line}\n- If the invalid label repeats a disallowed term, remove that term and preserve the remaining concrete action or topic when it still satisfies the rules.\n- Avoid vague abstractions; use the concrete event, product, policy, deal, market, executive, or compensation topic when available.\n- Use only the title below; do not add outside facts.\n\nInvalid label: {}\nProblem: {}\n\nTitle: {}\n",
-        invalid_label.trim(),
-        reason.prompt_text(),
-        item.title.trim()
-    )
+    let mut body = format!(
+        "{context}\n\nRepair the editorial tags below.\n\nRules:\n- Return ONLY JSON: {{\"items\":[{{\"id\":1,\"label\":\"2-3 Word Tag\"}}]}}.\n- Return exactly one item for each title and preserve IDs.\n- Labels must be 2-3 words in Title Case with no trailing punctuation.\n- Never use \"News\" or repeat the active company name or ticker.{disallowed_line}\n- Use the concrete event, product, policy, deal, market, executive, or compensation topic; avoid vague abstractions.\n- Use only the title and do not add outside facts.\n\nItems:\n"
+    );
+    for (idx, item) in items.iter().enumerate() {
+        body.push_str(&format!(
+            "{}.\nInvalid label: {}\nProblem: {}\nTitle: {}\n\n",
+            idx + 1,
+            item.invalid_label.trim(),
+            item.reason.prompt_text(),
+            item.title.trim(),
+        ));
+    }
+    body
 }
 
 fn sorted_label_terms(terms: &HashSet<String>) -> Vec<String> {
@@ -1006,6 +1030,40 @@ fn sorted_label_terms(terms: &HashSet<String>) -> Vec<String> {
     terms.sort();
     terms.dedup();
     terms
+}
+
+fn parse_news_analysis_decisions(
+    text: &str,
+    expected_len: usize,
+) -> Option<Vec<NewsAnalysisDecision>> {
+    let value = parse_first_json_value(text)?;
+    let items = value
+        .as_object()
+        .and_then(|map| map.get("items"))
+        .unwrap_or(&value)
+        .as_array()?;
+    let mut decisions = vec![None; expected_len];
+    for item in items {
+        let raw = RawNewsAnalysisDecision::deserialize(item.clone()).ok()?;
+        let id = json_item_id(raw.id?)?;
+        if !(1..=expected_len).contains(&id) || decisions[id - 1].is_some() {
+            return None;
+        }
+        let include = raw.include?;
+        decisions[id - 1] = Some(NewsAnalysisDecision {
+            include,
+            label: include.then_some(raw.label).flatten(),
+        });
+    }
+    decisions.into_iter().collect()
+}
+
+fn json_item_id(value: serde_json::Value) -> Option<usize> {
+    match value {
+        serde_json::Value::Number(number) => number.as_u64()?.try_into().ok(),
+        serde_json::Value::String(number) => number.trim().parse().ok(),
+        _ => None,
+    }
 }
 
 fn parse_news_editorial_labels(text: &str, expected_len: usize) -> Option<Vec<Option<String>>> {
@@ -1321,6 +1379,36 @@ mod unit_tests {
     use super::*;
 
     #[test]
+    fn combined_analysis_maps_relevance_and_labels_by_id() {
+        let decisions = parse_news_analysis_decisions(
+            r#"{"items":[{"id":2,"include":false,"label":null},{"id":"1","include":true,"label":"AI Chip Rules"}]}"#,
+            2,
+        )
+        .expect("analysis decisions");
+
+        assert_eq!(
+            decisions,
+            vec![
+                NewsAnalysisDecision {
+                    include: true,
+                    label: Some("AI Chip Rules".to_string()),
+                },
+                NewsAnalysisDecision {
+                    include: false,
+                    label: None,
+                },
+            ]
+        );
+        assert!(
+            parse_news_analysis_decisions(
+                r#"{"items":[{"id":1,"include":true,"label":"AI Chip Rules"}]}"#,
+                2,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn editorial_labels_map_partial_out_of_order_ids() {
         let labels = parse_news_editorial_labels(
             r#"{"items":[{"id":3,"label":"July Short Ban"},{"id":"1","label":"AI Stock Shorts"}]}"#,
@@ -1377,28 +1465,40 @@ mod workflow_tests {
                 .lock()
                 .expect("prompts")
                 .push(req.prompt.clone());
-            let text = if req
-                .prompt
-                .contains("Decide whether each news article title is relevant enough")
-            {
-                let include = req
+            let text = if req.prompt.contains("For each numbered news title") {
+                let items = req
                     .prompt
                     .lines()
-                    .filter(|line| {
+                    .filter_map(|line| {
                         let trimmed = line.trim_start();
-                        trimmed
+                        let numbered = trimmed
                             .chars()
                             .next()
                             .map(|ch| ch.is_ascii_digit())
                             .unwrap_or(false)
-                            && trimmed.contains(". ")
+                            && trimmed.contains(". ");
+                        numbered.then_some(trimmed.split_once(". ")?.1)
                     })
                     .enumerate()
-                    .filter(|(_, line)| !line.contains("Jimmy Kimmel"))
-                    .map(|(idx, _)| (idx + 1).to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                format!(r#"{{"include":[{include}]}}"#)
+                    .map(|(idx, title)| {
+                        let include = !title.contains("Jimmy Kimmel");
+                        let label = include.then(|| {
+                            if title.contains("AI & Tech Brief") {
+                                "Nvidia Issues Warning"
+                            } else if title.contains("Week Ahead") {
+                                "Upcoming Nvidia Moment"
+                            } else {
+                                "AI Chip Rules"
+                            }
+                        });
+                        serde_json::json!({
+                            "id": idx + 1,
+                            "include": include,
+                            "label": label,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({ "items": items }).to_string()
             } else if req
                 .prompt
                 .contains("Write polished editorial tags for each news row")
@@ -1434,28 +1534,26 @@ mod workflow_tests {
                     .collect::<Vec<_>>()
                     .join(",");
                 format!(r#"{{"items":[{items}]}}"#)
-            } else if req.prompt.contains("Repair one editorial tag") {
-                if req.prompt.contains("Blackstone") {
-                    return Ok(CompletionResponse {
-                        text: serde_json::json!({
-                            "items": [{
-                                "label": "AI Models To Firms",
-                            }],
-                        })
-                        .to_string(),
-                        usage: TokenUsage {
-                            input_tokens: 1200,
-                            output_tokens: 140,
-                            total_tokens: 1340,
-                        },
-                    });
-                }
-                serde_json::json!({
-                    "items": [{
-                        "label": "AI Chip Rules",
-                    }],
-                })
-                .to_string()
+            } else if req.prompt.contains("Repair the editorial tags below") {
+                let items = req
+                    .prompt
+                    .lines()
+                    .filter_map(|line| line.trim_start().strip_prefix("Title: "))
+                    .enumerate()
+                    .map(|(idx, title)| {
+                        let label = if title.contains("Blackstone") {
+                            "Portfolio AI Models"
+                        } else if title.contains("Week Ahead") {
+                            "Earnings Week Ahead"
+                        } else if title.contains("AI & Tech Brief") {
+                            "Inflection Point Warning"
+                        } else {
+                            "AI Chip Rules"
+                        };
+                        serde_json::json!({ "id": idx + 1, "label": label })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({ "items": items }).to_string()
             } else {
                 "Nvidia coverage says AI chip demand remains ahead of near-term supply.".to_string()
             };
@@ -1501,13 +1599,22 @@ mod workflow_tests {
                     }],
                 })
                 .to_string()
-            } else if req.prompt.contains("Repair one editorial tag") {
-                serde_json::json!({
-                    "items": [{
-                        "label": "Data Center Expansion",
-                    }],
-                })
-                .to_string()
+            } else if req.prompt.contains("Repair the editorial tags below") {
+                let items = req
+                    .prompt
+                    .lines()
+                    .filter_map(|line| line.trim_start().strip_prefix("Title: "))
+                    .enumerate()
+                    .map(|(idx, title)| {
+                        let label = if title.contains("AWS") {
+                            "Data Center Expansion"
+                        } else {
+                            "Cloud Capacity Growth"
+                        };
+                        serde_json::json!({ "id": idx + 1, "label": label })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({ "items": items }).to_string()
             } else {
                 unreachable!("unexpected prompt")
             };
@@ -1728,7 +1835,7 @@ mod workflow_tests {
         assert_eq!(
             prompts
                 .iter()
-                .filter(|prompt| prompt.contains("Repair one editorial tag"))
+                .filter(|prompt| prompt.contains("Repair the editorial tags below"))
                 .count(),
             1
         );
@@ -1740,7 +1847,7 @@ mod workflow_tests {
         assert!(
             prompts
                 .iter()
-                .filter(|prompt| prompt.contains("Repair one editorial tag"))
+                .filter(|prompt| prompt.contains("Repair the editorial tags below"))
                 .all(|prompt| !prompt.contains("Nvidia faces AI chip export rule changes"))
         );
     }
@@ -1776,24 +1883,21 @@ mod workflow_tests {
             assert!(!article.label.contains("Nvidia"));
             assert!((2..=3).contains(&article.label.split_whitespace().count()));
         }
-        assert!(
-            llm.prompts
-                .lock()
-                .expect("prompts")
-                .iter()
-                .any(|prompt| { prompt.contains("Repair one editorial tag") })
-        );
+        let prompts = llm.prompts.lock().expect("prompts");
         assert_eq!(
-            llm.prompts
-                .lock()
-                .expect("prompts")
+            prompts
                 .iter()
-                .filter(|prompt| {
-                    prompt.contains("Write polished editorial tags for each news row")
-                })
+                .filter(|prompt| { prompt.contains("For each numbered news title") })
                 .count(),
             1
         );
+        let repair_prompts = prompts
+            .iter()
+            .filter(|prompt| prompt.contains("Repair the editorial tags below"))
+            .collect::<Vec<_>>();
+        assert_eq!(repair_prompts.len(), 1);
+        assert!(repair_prompts[0].contains("Week Ahead"));
+        assert!(repair_prompts[0].contains("AI & Tech Brief"));
     }
 
     #[tokio::test]
@@ -1906,7 +2010,7 @@ mod workflow_tests {
             .await
             .expect("second workflow");
         let prompts = llm.prompts.lock().expect("prompts");
-        assert_eq!(prompts.len() - first_prompt_count, 2);
+        assert_eq!(prompts.len() - first_prompt_count, 1);
         assert!(
             prompts[first_prompt_count..]
                 .iter()
@@ -1980,7 +2084,7 @@ mod workflow_tests {
 
         assert_eq!(
             llm.prompts.lock().expect("prompts").len() - first_prompt_count,
-            2
+            1
         );
     }
 
